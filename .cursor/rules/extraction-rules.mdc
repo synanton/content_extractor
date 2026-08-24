@@ -1,0 +1,156 @@
+---
+description: Structured Content Extraction Plane architectural invariants — enforced at all times
+globs: java/**/*.java,java/**/*.kt,java/**/*.proto
+alwaysApply: true
+---
+
+# Structured Content Extraction Plane — Architectural Invariants
+
+These rules are non-negotiable. Violating any of them breaks the contract with the Synanton
+platform. Section references are to the v1.21 proposal (`§n`) and its architectural invariants
+(`§67.n`).
+
+## 1. Contract over topology (§67.1)
+
+The `synanton.extraction.v1` contract MUST be identical whether extraction runs embedded in the
+platform, co-located, or as an independently scaled cluster. Deployment topology is a scaling
+concern, never a contract concern.
+
+The protos in `java/extraction-contract/src/main/proto/` are a **byte-identical mirror** of the
+copy in `../platform`. Never edit one side alone. `./scripts/verify-contract-mirror.sh` enforces
+this and is wired into `check`.
+
+> The `synanton.gpu.v1` pair drifted exactly this way — one file vs four, `org.*` vs `com.*`,
+> different RPC names — because nothing checked. Do not repeat it here.
+
+## 2. Black-box extraction (§67.2)
+
+The platform MUST NOT be able to tell which parser, library, accelerator, queue, or worker
+performed the work. Forbidden in any contract identifier, message, field, enum value, or error
+code: `opendataloader`, `tika`, `tesseract`, `pdfbox`, `whisper`, `ffmpeg`, `vllm`, `worker`,
+`pool`, `broker`, `kafka`, `redis`, `kubernetes`, `pod`, `replica`, `shard`, `gpu`, `cuda`,
+`device_id`, `equalix`.
+
+`ContractOpacityTest` walks the compiled descriptors and fails the build on any of these.
+
+## 3. Raw source authority (§67.3)
+
+The plane MUST NOT modify, move, or delete the source object. Source bytes remain the single
+authoritative artifact. Adapters receive a read-only stream.
+
+## 4. Domain isolation
+
+`domain/` MUST NOT import protobuf classes, JDBC/Spring, the S3 SDK, Tika, OpenDataLoader, or any
+`adapter/` package. The domain crosses only its own ports: `OperationRepository`,
+`IdempotencyStore`, `SourceObjectReader`, `PayloadWriter`, `ModalityAdapter`.
+
+Repositories return domain objects, never protobuf. Protobuf conversion happens in
+`adapter/in/grpc/` only.
+
+## 5. PostgreSQL is the authoritative operation store
+
+Operation and item state live exclusively in PostgreSQL. No in-memory cache, Redis, Kafka, or
+Cassandra may hold or replicate operation state. Redis MUST NOT be introduced for state,
+idempotency, admission counters, or any other plane concern — PostgreSQL advisory locks handle
+admission serialization.
+
+## 6. Idempotency is required (§67.6)
+
+Every asynchronous submit carries an idempotency key, and the store is **fail-closed**: if the
+idempotency store is unavailable, reject the submit. Never admit expensive work whose duplicate
+status is unknown.
+
+- same key + same request → the same operation
+- same key + materially different request → `ERROR_INVALID_REQUEST`, original untouched
+
+## 7. Feature state must be honest (§67.10)
+
+A requested feature that was not applied MUST NOT be reported as success by omission. Compute
+feature state from what the processor **actually produced**, never from what was requested.
+
+`ocr = true` on the request tells a caller nothing on its own. The result must say `FEATURE_APPLIED`,
+`FEATURE_NOT_APPLICABLE`, `FEATURE_UNSUPPORTED`, `FEATURE_FAILED`, or `FEATURE_PARTIAL`.
+
+## 8. Errors are contract codes, not implementation detail (§24)
+
+Consumers branch only on `ExtractionErrorCode`. A parser NPE is a `diagnostic` string attached to
+`ERROR_EXTRACTION_FAILED`; it is never its own code. Never let an implementation-specific string
+become load-bearing for callers.
+
+## 9. Expiry is a lifecycle outcome, not a failure (§12)
+
+An operation past `expires_at` reports `STATUS_EXPIRED`, never `STATUS_FAILED`. Before execution and
+while queued, expiry cancels the work without starting it. While running, the plane MAY let the
+work finish when cancelling costs more than completing.
+
+## 10. No consumer reparse (§67.17)
+
+`flattened_text` MUST be derived from the structured payload. A consumer that wants only text MUST
+NOT cause the source to be extracted a second time.
+
+## 11. Extraction is not knowledge processing (§67.18)
+
+Out of scope in this repository: ontology management, entity resolution, canonical business
+entities, relationship inference, business classification, ranking, workflow decisions, permanent
+knowledge storage.
+
+OCR'ing "Acme Corporation" is extraction. Resolving it to `Company#1234` is not — that belongs to
+the platform.
+
+## 12. Business metadata is opaque (§67.11)
+
+`metadata`, `business_tags`, and unknown `routing_tags` are carried, stored, and returned unchanged.
+The plane MUST NOT attach domain semantics to keys like `ticketId` or `caseId`.
+
+## 13. Untrusted content
+
+Source content is hostile until proven otherwise. Enforce max object size **before** download, max
+processing duration, and max output payload size. Never execute code supplied by source content.
+A malicious artifact must yield a contract error code — never a hang, an OOM, or a crashed gateway.
+
+## 14. Sync must not become a second implementation (§19)
+
+`ExtractSync` is submit-and-await over the same domain path as the async flow. It MUST NOT have its
+own extraction path or its own result model.
+
+## 15. No scheduler dependency (§67.9)
+
+Only scheduling *intent* (`PriorityClass`) crosses the contract. Equalix or any other scheduler
+remains optional, wired via configuration, behind a domain interface. Domain code MUST NOT
+reference a scheduler implementation directly.
+
+## 16. No webhooks in v1.21 (§67.15)
+
+Notification is operation id + `GetOperations` + `ListCompletedOperations` cursor polling. Do not
+add callbacks, and do not make a future notification mechanism a contract dependency.
+
+## 17. Sensitive data MUST NOT be logged
+
+Never log document text, transcripts, OCR output, generated descriptions, or payload bytes. Log
+only: `operation_id`, `content_ref_id`, `tenant_id`, `media_type`, `processor_id`, state
+transitions, error codes, durations, byte counts.
+
+## 18. State transitions are validated by the domain
+
+`OperationState.canTransitionTo(next)` guards every state change. Adapters call the guard before
+persisting. An invalid state must be unreachable through normal code paths.
+
+## 19. Admission decisions are transactionally safe
+
+The admission check and the operation INSERT execute in a single PostgreSQL transaction under a
+tenant-level advisory lock:
+
+```sql
+SELECT pg_advisory_xact_lock(?)   -- tenant lock key
+SELECT COUNT(*) FROM extraction_operations WHERE tenant_id = ? AND status NOT IN (terminal...)
+INSERT INTO extraction_operations ...
+```
+
+`COUNT` alone races: two submits can both read the same free slot and both insert. The advisory
+lock closes it.
+
+## 20. No dependency on the GPU plane
+
+This repository MUST NOT depend on `synanton.gpu.v1` or reach the GPU Execution Plane through the
+platform. If extraction wants accelerated processing, that is its own internal decision behind its
+own boundary.
