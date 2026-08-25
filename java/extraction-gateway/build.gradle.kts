@@ -1,0 +1,73 @@
+// extraction-gateway: Spring Boot gRPC server — the sole entry point for the extraction plane.
+//
+// Owns: admission, operation lifecycle, routing to modality adapters, PostgreSQL state store.
+// All adapters are on the classpath and discovered via component scan.
+
+plugins {
+    java
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dep.mgmt)
+}
+
+dependencies {
+    // Contract (gRPC stubs + proto messages)
+    implementation(project(":java:extraction-contract"))
+
+    // Domain model + port interfaces
+    implementation(project(":java:extraction-spi"))
+
+    // Adapters — discovered by Spring component scan at runtime
+    implementation(project(":java:adapter-document-text"))
+    implementation(project(":java:adapter-document-pdf"))
+    implementation(project(":java:adapter-stubs"))
+
+    // Spring Boot
+    implementation(libs.spring.boot.starter)
+    implementation(libs.spring.boot.starter.jdbc)
+    implementation(libs.spring.boot.starter.actuator)
+
+    // gRPC server transport
+    implementation(libs.grpc.netty.shaded)
+    implementation(libs.grpc.protobuf)
+    implementation(libs.grpc.stub)
+    compileOnly(libs.javax.annotation)
+
+    // Persistence
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.postgresql)
+    runtimeOnly(libs.postgresql)
+
+    // JSON (result payload serialization in DB)
+    implementation(libs.jackson.databind)
+
+    // Logging
+    implementation(libs.logback.classic)
+
+    compileOnly(libs.lombok)
+    annotationProcessor(libs.lombok)
+
+    // Test
+    testImplementation(libs.spring.boot.starter.test)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.assertj.core)
+    testImplementation(libs.mockito.core)
+    testImplementation(libs.mockito.junit)
+    testImplementation(libs.grpc.inprocess)
+    testImplementation(libs.grpc.testing)
+
+    // In-memory H2 for unit tests that touch the store
+    testImplementation(libs.h2)
+
+    // TestContainers for full integration tests (SCEP-4)
+    testImplementation(platform(libs.testcontainers.bom))
+    testImplementation(libs.testcontainers.postgresql)
+    testImplementation(libs.testcontainers.junit)
+
+    testCompileOnly(libs.lombok)
+    testAnnotationProcessor(libs.lombok)
+}
+
+tasks.named<Test>("test") {
+    useJUnitPlatform()
+}
