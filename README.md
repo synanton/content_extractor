@@ -1,6 +1,6 @@
 # Synanton Content Extractor
 
-[![Status](https://img.shields.io/badge/Status-SCEP--1%20Contract-blue)](https://github.com/Synanton/content_extractor)
+[![Status](https://img.shields.io/badge/Status-SCEP--3%20Contract-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
 [![gRPC](https://img.shields.io/badge/gRPC-Protobuf-purple)](https://grpc.io/)
@@ -1050,15 +1050,15 @@ The following rules are non-negotiable:
 
 The repository is implementing the Structured Content Extraction Plane incrementally.
 
-| Phase      | Name                                         | Status     |
-| ---------- | -------------------------------------------- | ---------- |
-| **SCEP-1** | Extraction contract                          | ✅ Complete |
-| **SCEP-2** | Extraction plane skeleton + synchronous path | Planned    |
-| **SCEP-3** | PDF extraction PoC with OpenDataLoader       | Planned    |
-| **SCEP-4** | Asynchronous operation model                 | Planned    |
-| **SCEP-5** | Synanton platform integration                | Planned    |
-| **SCEP-6** | Topology equivalence + hardening             | Planned    |
-| **SCEP-7** | Multimodal expansion: audio, image, video    | Post-v1.21 |
+| Phase      | Name                                         | Status       |
+| ---------- | -------------------------------------------- | ------------ |
+| **SCEP-1** | Extraction contract                          | ✅ Complete  |
+| **SCEP-2** | Extraction plane skeleton + synchronous path | ✅ Complete  |
+| **SCEP-3** | PDF extraction PoC with OpenDataLoader       | ✅ Complete  |
+| **SCEP-4** | Asynchronous operation model                 | Planned      |
+| **SCEP-5** | Synanton platform integration                | Planned      |
+| **SCEP-6** | Topology equivalence + hardening             | Planned      |
+| **SCEP-7** | Multimodal expansion: audio, image, video    | Post-v1.21   |
 
 The architecture is intentionally being established before committing the platform to a particular extraction implementation.
 
