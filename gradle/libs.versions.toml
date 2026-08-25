@@ -22,6 +22,7 @@ tika                  = "2.9.2"
 
 [libraries]
 # Spring Boot starters
+spring-boot-starter            = { module = "org.springframework.boot:spring-boot-starter",            version.ref = "springBoot" }
 spring-boot-starter-jdbc       = { module = "org.springframework.boot:spring-boot-starter-jdbc",       version.ref = "springBoot" }
 spring-boot-starter-actuator   = { module = "org.springframework.boot:spring-boot-starter-actuator",   version.ref = "springBoot" }
 spring-boot-starter-test       = { module = "org.springframework.boot:spring-boot-starter-test",       version.ref = "springBoot" }

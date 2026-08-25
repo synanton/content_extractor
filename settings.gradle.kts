@@ -14,8 +14,11 @@ dependencyResolutionManagement {
     }
 }
 
-// SCEP-1 delivers the contract module only. The service modules
-// (extraction-gateway, extraction-spi, adapter-document-*) land in SCEP-2/3.
 include(
     "java:extraction-contract",
+    "java:extraction-spi",
+    "java:extraction-gateway",
+    "java:adapter-document-text",
+    "java:adapter-document-pdf",
+    "java:adapter-stubs",
 )
