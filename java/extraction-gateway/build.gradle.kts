@@ -23,7 +23,7 @@ dependencies {
 
     // Spring Boot
     implementation(libs.spring.boot.starter)
-    implementation(libs.spring.boot.starter.jdbc)
+    implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.actuator)
 
     // gRPC server transport
@@ -32,12 +32,10 @@ dependencies {
     implementation(libs.grpc.stub)
     compileOnly(libs.javax.annotation)
 
-    // Persistence
-    implementation(libs.flyway.core)
-    implementation(libs.flyway.postgresql)
-    runtimeOnly(libs.postgresql)
+    // Object storage (MinIO via S3 API)
+    implementation(libs.aws.s3)
 
-    // JSON (result payload serialization in DB)
+    // JSON (payload digest / mapping helpers)
     implementation(libs.jackson.databind)
 
     // Logging
@@ -70,4 +68,13 @@ dependencies {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+}
+
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    archiveBaseName.set("extraction-gateway")
+    mainClass.set("synanton.extraction.ExtractionGatewayApplication")
+}
+
+tasks.named<Jar>("jar") {
+    enabled = false
 }

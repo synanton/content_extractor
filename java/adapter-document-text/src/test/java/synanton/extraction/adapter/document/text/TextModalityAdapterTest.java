@@ -60,6 +60,11 @@ class TextModalityAdapterTest {
     }
 
     @Test
+    void shouldReturnTrueForTextMarkdown() {
+        assertThat(ADAPTER.supports("text/markdown")).isTrue();
+    }
+
+    @Test
     void shouldReturnTrueForTextHtml() {
         assertThat(ADAPTER.supports("text/html")).isTrue();
     }

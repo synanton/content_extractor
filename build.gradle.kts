@@ -39,13 +39,13 @@ tasks.register("buildAll") {
     dependsOn(subprojects.map { it.tasks.named("build") })
 }
 
-// Fails when the mirrored synanton.extraction.v1 protos diverge from the copy in
-// the platform repository. The synanton.gpu.v1 pair drifted precisely because no
-// such check existed: it is now one file vs four, org.* vs com.*, with different
-// RPC names. Wired into `check` so CI enforces it.
 tasks.register<Exec>("verifyContractMirror") {
     group = "verification"
     description = "Verify the extraction contract matches the platform repository copy"
     commandLine("./scripts/verify-contract-mirror.sh")
     isIgnoreExitValue = false
+}
+
+tasks.named("check") {
+    dependsOn("verifyContractMirror")
 }

@@ -45,6 +45,8 @@ public class TextModalityAdapter implements ModalityAdapter {
 
     private static final Set<String> SUPPORTED_TYPES = Set.of(
             "text/plain",
+            "text/markdown",
+            "text/x-markdown",
             "text/html",
             "text/csv",
             "text/xhtml+xml",

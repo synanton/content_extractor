@@ -1,12 +1,7 @@
 name: Extraction Contract Mirror
 
 # Fails when the synanton.extraction.v1 protos diverge between this repository and
-# synanton/platform.
-#
-# This job exists because the synanton.gpu.v1 "mirror" silently drifted: the two
-# copies are now one file vs four, com.* vs org.*, with different RPC names, and no
-# build ever complained. A contract that differs per repository is not one contract,
-# and topology independence depends on it being one.
+# synanton/platform. GPU contract mirroring is owned by platform + gpu-runtime.
 #
 # The local `check` task also runs this script, but only enforces when a sibling
 # checkout happens to be present. This job is what makes it authoritative.
