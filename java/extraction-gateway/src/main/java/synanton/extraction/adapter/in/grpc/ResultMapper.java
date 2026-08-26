@@ -26,6 +26,7 @@ import synanton.extraction.v1.ExtractionStatus;
 import synanton.extraction.v1.FeatureState;
 import synanton.extraction.v1.ObjectReference;
 import synanton.extraction.v1.PayloadDescriptor;
+import synanton.extraction.v1.ResourceUsage;
 import synanton.extraction.v1.ResultProvenance;
 import synanton.extraction.v1.SerializationFormat;
 import synanton.extraction.v1.StructuredPayload;
@@ -113,6 +114,66 @@ final class ResultMapper {
                         .setNanos(Instant.now().getNano())
                         .build())
                 .build());
+
+        if (outcome.wallMs() > 0 || outcome.outputChars() > 0 || outcome.inputBytes() > 0) {
+            builder.setUsage(ResourceUsage.newBuilder()
+                    .setWallMs(outcome.wallMs())
+                    .setCpuNs(outcome.cpuNs())
+                    .setInputBytes(outcome.inputBytes())
+                    .setOutputChars(outcome.outputChars())
+                    .build());
+        }
+
+        return builder.build();
+    }
+
+    static ExtractionResult toResult(SyncExtractionOutcome outcome, String contentRefId, int itemIndex) {
+        ExtractionResult.Builder builder = ExtractionResult.newBuilder()
+                .setOperationId(outcome.operationId())
+                .setItemIndex(itemIndex)
+                .setContentRefId(nvl(contentRefId))
+                .setStatus(toStatus(outcome.status()));
+
+        if (outcome.failure() != null) {
+            builder.setError(toError(outcome.failure()));
+        }
+
+        if (outcome.document() != null) {
+            DocumentPayload payload = toDocumentPayload(outcome.document());
+            byte[] bytes = payload.toByteArray();
+            builder.setFlattenedText(nvl(outcome.document().flattenedText()));
+            builder.setPayload(StructuredPayload.newBuilder()
+                    .setPayloadDescriptor(PayloadDescriptor.newBuilder()
+                            .setSchemaId("synanton.extraction.document")
+                            .setSchemaVersion("1.0")
+                            .setProcessorId(nvl(outcome.processorId(), "document-adapter"))
+                            .setProcessorVersion("1.0")
+                            .setFormat(SerializationFormat.SERIALIZATION_PROTOBUF)
+                            .setPayloadDigest(sha256Hex(bytes))
+                            .build())
+                    .setInlineContent(ByteString.copyFrom(bytes))
+                    .build());
+        }
+
+        outcome.featureStates().forEach((k, v) -> builder.putFeatureStates(k, toFeatureState(v)));
+
+        builder.setProvenance(ResultProvenance.newBuilder()
+                .setContentRefId(nvl(outcome.contentRefId()))
+                .setSourceSha256(nvl(outcome.sourceSha256()))
+                .setExtractedAt(Timestamp.newBuilder()
+                        .setSeconds(Instant.now().getEpochSecond())
+                        .setNanos(Instant.now().getNano())
+                        .build())
+                .build());
+
+        if (outcome.wallMs() > 0 || outcome.outputChars() > 0 || outcome.inputBytes() > 0) {
+            builder.setUsage(ResourceUsage.newBuilder()
+                    .setWallMs(outcome.wallMs())
+                    .setCpuNs(outcome.cpuNs())
+                    .setInputBytes(outcome.inputBytes())
+                    .setOutputChars(outcome.outputChars())
+                    .build());
+        }
 
         return builder.build();
     }

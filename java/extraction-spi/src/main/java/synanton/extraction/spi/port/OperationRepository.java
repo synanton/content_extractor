@@ -16,17 +16,6 @@ import java.util.Optional;
  */
 public interface OperationRepository {
 
-    /**
-     * Represents one item (content ref) within a multi-item extraction operation.
-     *
-     * @param itemIndex       zero-based position of the item within the operation
-     * @param contentRefId    the caller-supplied content reference identifier
-     * @param mediaType       the IANA media type of the source content
-     * @param state           the current lifecycle state of the item
-     * @param featureStates   the outcome of each requested extraction feature for this item
-     * @param errorCode       the error code if the item failed (null otherwise)
-     * @param errorDiagnostic the operator-level diagnostic if the item failed (null otherwise)
-     */
     record ItemRecord(
             int itemIndex,
             String contentRefId,
@@ -79,6 +68,22 @@ public interface OperationRepository {
     }
 
     /**
+     * Source object metadata persisted for an operation item.
+     */
+    record ItemSource(
+            String bucket,
+            String key,
+            String version,
+            String sha256,
+            long sizeBytes) {
+    }
+
+    /**
+     * Persists a newly admitted operation and its item source metadata.
+     */
+    void saveNewOperation(ExtractionOperation operation, List<ItemSource> itemSources);
+
+    /**
      * Persists a new or updated {@link ExtractionOperation}.
      *
      * @param operation the operation to save
@@ -105,17 +110,37 @@ public interface OperationRepository {
     /**
      * Atomically transitions an operation from one state to another.
      *
-     * <p>Validates the transition via {@link OperationState#canTransitionTo(OperationState)}
-     * before applying the change. Throws if the current persisted state does not match {@code from}
-     * or if the transition is not permitted.
-     *
-     * @param operationId the operation to update
-     * @param from        the expected current state
-     * @param to          the target state
-     * @throws IllegalStateException    if the {@code from → to} transition is not permitted
-     * @throws IllegalArgumentException if the current state does not match {@code from}
+     * @return {@code true} when exactly one row was updated
      */
-    void transitionState(String operationId, OperationState from, OperationState to);
+    boolean transitionState(String operationId, OperationState from, OperationState to);
+
+    /**
+     * Claims the oldest queued operation for processing, transitioning it to {@code RUNNING}.
+     *
+     * @param leasedUntil lease expiry for the claimed operation
+     * @return the claimed operation identifier, or empty when no work is available
+     */
+    Optional<String> claimNextQueued(Instant leasedUntil);
+
+    /**
+     * Extends the lease on a running operation.
+     */
+    void refreshLease(String operationId, Instant leasedUntil);
+
+    /**
+     * Counts non-terminal operations for a tenant.
+     */
+    int countActiveOperations(String tenantId);
+
+    /**
+     * Acquires a transaction-scoped advisory lock for tenant admission.
+     */
+    void acquireTenantAdmissionLock(String tenantId);
+
+    /**
+     * Assigns a monotonic completion sequence when an operation reaches a terminal state.
+     */
+    void assignCompletionSequence(String operationId);
 
     /**
      * Updates the state and feature outcomes of a single item within an operation.
@@ -140,4 +165,8 @@ public interface OperationRepository {
      * @return a page of completed operations in ascending creation order
      */
     List<ExtractionOperation> listCompleted(String tenantId, String cursor, int pageSize);
+
+    Optional<ItemSource> findItemSource(String operationId, int itemIndex);
+
+    Optional<Long> findCompletionSequence(String operationId);
 }

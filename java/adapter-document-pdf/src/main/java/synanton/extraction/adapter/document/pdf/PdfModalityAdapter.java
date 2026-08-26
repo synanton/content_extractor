@@ -3,6 +3,7 @@ package synanton.extraction.adapter.document.pdf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import synanton.extraction.spi.model.AdapterResult;
+import synanton.extraction.spi.model.ContentOrigin;
 import synanton.extraction.spi.model.ExtractionFailure;
 import synanton.extraction.spi.model.ExtractionOptions;
 import synanton.extraction.spi.model.ExtractionRequest;
@@ -66,7 +67,7 @@ public class PdfModalityAdapter implements ModalityAdapter {
             OdlResponse odlResponse = client.extract(pdfBytes);
             NormalizedDocument document = normalizer.normalize(odlResponse, request.mediaType());
 
-            Map<String, FeatureOutcome> featureStates = buildFeatureStates(request, odlResponse);
+            Map<String, FeatureOutcome> featureStates = buildFeatureStates(request, document, odlResponse);
             return AdapterResult.success(document, featureStates);
 
         } catch (OpenDataLoaderException e) {
@@ -85,7 +86,10 @@ public class PdfModalityAdapter implements ModalityAdapter {
         }
     }
 
-    private Map<String, FeatureOutcome> buildFeatureStates(ExtractionRequest request, OdlResponse response) {
+    private Map<String, FeatureOutcome> buildFeatureStates(
+            ExtractionRequest request,
+            NormalizedDocument document,
+            OdlResponse response) {
         Map<String, FeatureOutcome> states = new LinkedHashMap<>();
         ExtractionOptions options = request.options() != null ? request.options() : ExtractionOptions.defaults();
 
@@ -98,8 +102,14 @@ public class PdfModalityAdapter implements ModalityAdapter {
                 ? (hasTables ? FeatureOutcome.APPLIED : FeatureOutcome.NOT_APPLICABLE)
                 : FeatureOutcome.NOT_REQUESTED);
 
-        states.put("ocr", Boolean.TRUE.equals(options.ocr())
-                ? FeatureOutcome.APPLIED : FeatureOutcome.NOT_REQUESTED);
+        boolean ocrRequested = Boolean.TRUE.equals(options.ocr());
+        boolean hasOcrProvenance = document.elements().stream()
+                .anyMatch(el -> el.contentOrigin() == ContentOrigin.OCR);
+        if (ocrRequested) {
+            states.put("ocr", hasOcrProvenance ? FeatureOutcome.APPLIED : FeatureOutcome.FAILED);
+        } else {
+            states.put("ocr", FeatureOutcome.NOT_REQUESTED);
+        }
 
         boolean hasImages = response.getKids() != null && response.getKids().stream()
                 .anyMatch(k -> k.getType() != null
@@ -111,7 +121,8 @@ public class PdfModalityAdapter implements ModalityAdapter {
 
         states.put("transcription", FeatureOutcome.NOT_APPLICABLE);
         states.put("sceneAnalysis", Boolean.TRUE.equals(options.sceneAnalysis())
-                ? FeatureOutcome.NOT_APPLICABLE : FeatureOutcome.NOT_REQUESTED);
+                ? FeatureOutcome.UNSUPPORTED
+                : FeatureOutcome.NOT_REQUESTED);
 
         return states;
     }

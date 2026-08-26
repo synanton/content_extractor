@@ -7,11 +7,20 @@ import io.grpc.inprocess.InProcessServerBuilder;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import synanton.extraction.adapter.document.text.TextModalityAdapter;
 import synanton.extraction.adapter.out.objectstore.InMemorySourceObjectReader;
+import synanton.extraction.adapter.out.persistence.OperationAdmissionExecutor;
 import synanton.extraction.config.ExtractionGatewayProperties;
+import synanton.extraction.domain.service.CancelOperationService;
+import synanton.extraction.domain.service.CapacityService;
 import synanton.extraction.domain.service.ExtractSyncService;
 import synanton.extraction.domain.service.ExtractionRouter;
+import synanton.extraction.domain.service.OperationQueryService;
+import synanton.extraction.spi.port.OperationRepository;
+import synanton.extraction.spi.port.ResultStore;
 import synanton.extraction.v1.DocumentPayload;
 import synanton.extraction.v1.ExtractionResult;
 import synanton.extraction.v1.ExtractionServiceGrpc;
@@ -29,7 +38,26 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(MockitoExtension.class)
 class ExtractionGrpcAdapterTest {
+
+    @Mock
+    private OperationAdmissionExecutor admissionExecutor;
+
+    @Mock
+    private OperationQueryService operationQueryService;
+
+    @Mock
+    private CancelOperationService cancelOperationService;
+
+    @Mock
+    private CapacityService capacityService;
+
+    @Mock
+    private OperationRepository operationRepository;
+
+    @Mock
+    private ResultStore resultStore;
 
     private Server server;
     private ManagedChannel channel;
@@ -43,7 +71,15 @@ class ExtractionGrpcAdapterTest {
                 new ExtractionRouter(List.of(new TextModalityAdapter())),
                 store,
                 new ExtractionGatewayProperties());
-        ExtractionGrpcAdapter adapter = new ExtractionGrpcAdapter(service, new ExtractionGatewayProperties());
+        ExtractionGrpcAdapter adapter = new ExtractionGrpcAdapter(
+                service,
+                admissionExecutor,
+                operationQueryService,
+                cancelOperationService,
+                capacityService,
+                operationRepository,
+                resultStore,
+                new ExtractionGatewayProperties());
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name).directExecutor().addService(adapter).build().start();
         channel = InProcessChannelBuilder.forName(name).directExecutor().build();

@@ -9,6 +9,7 @@ public class ExtractionGatewayProperties {
     private int maxInboundMessageSizeBytes = 4_259_840;
     private Limits limits = new Limits();
     private Objectstore objectstore = new Objectstore();
+    private Async async = new Async();
 
     public static class Limits {
         private long maxObjectBytes = 268_435_456;
@@ -47,6 +48,44 @@ public class ExtractionGatewayProperties {
         public void setRegion(String region) { this.region = region; }
         public boolean isPathStyleAccess() { return pathStyleAccess; }
         public void setPathStyleAccess(boolean pathStyleAccess) { this.pathStyleAccess = pathStyleAccess; }
+    }
+
+    public static class Async {
+        private int maxConcurrentOperationsPerTenant = 10;
+        private long workerPollIntervalMs = 500;
+        private long leaseTimeoutSeconds = 300;
+
+        public int getMaxConcurrentOperationsPerTenant() {
+            return maxConcurrentOperationsPerTenant;
+        }
+
+        public void setMaxConcurrentOperationsPerTenant(int maxConcurrentOperationsPerTenant) {
+            this.maxConcurrentOperationsPerTenant = maxConcurrentOperationsPerTenant;
+        }
+
+        public long getWorkerPollIntervalMs() {
+            return workerPollIntervalMs;
+        }
+
+        public void setWorkerPollIntervalMs(long workerPollIntervalMs) {
+            this.workerPollIntervalMs = workerPollIntervalMs;
+        }
+
+        public long getLeaseTimeoutSeconds() {
+            return leaseTimeoutSeconds;
+        }
+
+        public void setLeaseTimeoutSeconds(long leaseTimeoutSeconds) {
+            this.leaseTimeoutSeconds = leaseTimeoutSeconds;
+        }
+    }
+
+    public Async getAsync() {
+        return async;
+    }
+
+    public void setAsync(Async async) {
+        this.async = async;
     }
 
     public int getGrpcPort() { return grpcPort; }

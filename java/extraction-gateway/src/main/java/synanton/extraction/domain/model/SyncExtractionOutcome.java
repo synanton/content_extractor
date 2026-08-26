@@ -17,7 +17,11 @@ public record SyncExtractionOutcome(
         Map<String, FeatureOutcome> featureStates,
         ExtractionFailure failure,
         String processorId,
-        String sourceSha256) {
+        String sourceSha256,
+        long wallMs,
+        long cpuNs,
+        long inputBytes,
+        long outputChars) {
 
     public enum OutcomeStatus {
         COMPLETED,
@@ -28,5 +32,18 @@ public record SyncExtractionOutcome(
 
     public SyncExtractionOutcome {
         featureStates = featureStates == null ? Map.of() : Map.copyOf(featureStates);
+    }
+
+    public SyncExtractionOutcome(
+            String operationId,
+            String contentRefId,
+            OutcomeStatus status,
+            NormalizedDocument document,
+            Map<String, FeatureOutcome> featureStates,
+            ExtractionFailure failure,
+            String processorId,
+            String sourceSha256) {
+        this(operationId, contentRefId, status, document, featureStates, failure,
+            processorId, sourceSha256, 0, 0, 0, 0);
     }
 }

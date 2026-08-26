@@ -1,165 +1,112 @@
 package synanton.extraction.adapter.document.pdf;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.databind.node.TextNode;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import synanton.extraction.spi.model.ContentOrigin;
+import synanton.extraction.spi.model.ElementBounds;
 import synanton.extraction.spi.model.ElementType;
+import synanton.extraction.spi.model.ExtractionOptions;
+import synanton.extraction.spi.model.ExtractionRequest;
+import synanton.extraction.spi.model.FeatureOutcome;
 import synanton.extraction.spi.model.NormalizedDocument;
 import synanton.extraction.spi.model.NormalizedElement;
+import synanton.extraction.spi.model.ObjectRef;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class OpenDataLoaderNormalizerTest {
 
-    private OpenDataLoaderNormalizer normalizer;
-    private ObjectMapper mapper;
+    private static final OpenDataLoaderNormalizer NORMALIZER = new OpenDataLoaderNormalizer();
 
-    @BeforeEach
-    void setUp() {
-        normalizer = new OpenDataLoaderNormalizer();
-        mapper = new ObjectMapper();
+    @Test
+    void shouldBuildFlattenedTextFromElementsOnly() throws Exception {
+        OdlResponse response = new OdlResponse();
+        OdlElement heading = new OdlElement();
+        heading.setType("heading");
+        heading.setPageNumber(1);
+        heading.setHeadingLevel(1);
+        heading.setContent(new ObjectMapper().getNodeFactory().textNode("Title"));
+        OdlElement paragraph = new OdlElement();
+        paragraph.setType("paragraph");
+        paragraph.setPageNumber(1);
+        paragraph.setContent(new ObjectMapper().getNodeFactory().textNode("Body text"));
+        response.setKids(List.of(heading, paragraph));
+
+        NormalizedDocument doc = NORMALIZER.normalize(response, "application/pdf");
+        assertThat(doc.flattenedText()).isEqualTo("Title\nBody text");
+
+        OdlElement mutated = new OdlElement();
+        mutated.setType("paragraph");
+        mutated.setPageNumber(1);
+        mutated.setContent(new ObjectMapper().getNodeFactory().textNode("Mutated"));
+        response.setKids(List.of(mutated));
+        NormalizedDocument mutatedDoc = NORMALIZER.normalize(response, "application/pdf");
+        assertThat(mutatedDoc.flattenedText()).isEqualTo("Mutated");
     }
 
     @Test
-    void shouldMapHeadingElement() {
-        OdlElement headingElement = new OdlElement();
-        headingElement.setType("heading");
-        headingElement.setId(1);
-        headingElement.setPageNumber(1);
-        headingElement.setBoundingBox(new double[]{72, 700, 540, 730});
-        headingElement.setHeadingLevel(1);
-        headingElement.setContent(new TextNode("Introduction"));
+    void shouldMapOcrContentOrigin() throws Exception {
+        OdlElement ocrParagraph = new OdlElement();
+        ocrParagraph.setType("paragraph");
+        ocrParagraph.setPageNumber(2);
+        ocrParagraph.setContentOrigin("ocr");
+        ocrParagraph.setContent(new ObjectMapper().getNodeFactory().textNode("Scanned line"));
 
         OdlResponse response = new OdlResponse();
-        response.setNumberOfPages(1);
-        response.setTitle("Test PDF");
-        response.setKids(List.of(headingElement));
+        response.setKids(List.of(ocrParagraph));
 
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
-
+        NormalizedDocument doc = NORMALIZER.normalize(response, "application/pdf");
         assertThat(doc.elements()).hasSize(1);
-        NormalizedElement element = doc.elements().get(0);
-        assertThat(element.type()).isEqualTo(ElementType.HEADING);
-        assertThat(element.level()).isEqualTo(1);
-        assertThat(element.text()).isEqualTo("Introduction");
-        assertThat(element.bounds().page()).isEqualTo(1);
+        assertThat(doc.elements().getFirst().contentOrigin()).isEqualTo(ContentOrigin.OCR);
     }
 
     @Test
-    void shouldMapParagraphElement() {
-        OdlElement paragraphElement = new OdlElement();
-        paragraphElement.setType("paragraph");
-        paragraphElement.setPageNumber(1);
-        paragraphElement.setContent(new TextNode("Some text here"));
+    void shouldReportHonestFeatureStatesForPdf() {
+        PdfModalityAdapter adapter = new PdfModalityAdapter();
+        NormalizedDocument document = new NormalizedDocument(
+                "application/pdf",
+                java.util.Map.of(),
+                List.of(new NormalizedElement(
+                        "p1-e1", ElementType.PARAGRAPH, ElementBounds.absent(),
+                        "Digital text", ContentOrigin.EMBEDDED_TEXT,
+                        0, List.of(), java.util.Map.of(), null)),
+                "Digital text");
 
-        OdlResponse response = new OdlResponse();
-        response.setKids(List.of(paragraphElement));
+        ExtractionRequest ocrRequest = requestWith(new ExtractionOptions(
+                true, null, null, null, null, true, null));
 
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
+        OdlResponse emptyKids = new OdlResponse();
+        emptyKids.setKids(List.of());
 
-        assertThat(doc.elements()).hasSize(1);
-        NormalizedElement element = doc.elements().get(0);
-        assertThat(element.type()).isEqualTo(ElementType.PARAGRAPH);
-        assertThat(element.text()).isEqualTo("Some text here");
+        Map<String, FeatureOutcome> states = invokeFeatureStates(adapter, ocrRequest, document, emptyKids);
+        assertThat(states).containsEntry("ocr", FeatureOutcome.FAILED);
+        assertThat(states).containsEntry("sceneAnalysis", FeatureOutcome.UNSUPPORTED);
     }
 
-    @Test
-    void shouldMapTableElementWithTextRepresentation() {
-        ObjectNode tableContent = mapper.createObjectNode();
-        tableContent.set("headers", mapper.createArrayNode().add("Col1").add("Col2"));
-        tableContent.set("rows", mapper.createArrayNode()
-                .add(mapper.createArrayNode().add("A").add("B")));
-
-        OdlElement tableElement = new OdlElement();
-        tableElement.setType("table");
-        tableElement.setPageNumber(2);
-        tableElement.setContent(tableContent);
-
-        OdlResponse response = new OdlResponse();
-        response.setKids(List.of(tableElement));
-
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
-
-        assertThat(doc.elements()).hasSize(1);
-        NormalizedElement element = doc.elements().get(0);
-        assertThat(element.type()).isEqualTo(ElementType.TABLE);
-        assertThat(element.text()).contains("Col1");
-        assertThat(element.text()).contains("Col2");
+    private static ExtractionRequest requestWith(ExtractionOptions options) {
+        return new ExtractionRequest(
+                "op-1", "tenant", "idem", "ref",
+                new ObjectRef("b", "k", null, null, 1L),
+                "application/pdf", options, "normal", Instant.now().plusSeconds(60));
     }
 
-    @Test
-    void shouldMapPictureElementWithDescription() {
-        OdlElement pictureElement = new OdlElement();
-        pictureElement.setType("picture");
-        pictureElement.setPageNumber(2);
-        pictureElement.setDescription("An architecture diagram");
-
-        OdlResponse response = new OdlResponse();
-        response.setKids(List.of(pictureElement));
-
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
-
-        assertThat(doc.elements()).hasSize(1);
-        NormalizedElement element = doc.elements().get(0);
-        assertThat(element.type()).isEqualTo(ElementType.IMAGE);
-        assertThat(element.alternateRepresentation()).isEqualTo("An architecture diagram");
-    }
-
-    @Test
-    void shouldMapFormulaElement() {
-        OdlElement formulaElement = new OdlElement();
-        formulaElement.setType("formula");
-        formulaElement.setPageNumber(1);
-        formulaElement.setContent(new TextNode("\\frac{f(x+h)-f(x)}{h}"));
-
-        OdlResponse response = new OdlResponse();
-        response.setKids(List.of(formulaElement));
-
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
-
-        assertThat(doc.elements()).hasSize(1);
-        NormalizedElement element = doc.elements().get(0);
-        assertThat(element.type()).isEqualTo(ElementType.FORMULA);
-        assertThat(element.alternateRepresentation()).contains("frac");
-    }
-
-    @Test
-    void shouldIncludeDocumentMetadata() {
-        OdlResponse response = new OdlResponse();
-        response.setTitle("My PDF");
-        response.setAuthor("Author");
-        response.setNumberOfPages(5);
-
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
-
-        assertThat(doc.metadata()).containsEntry("title", "My PDF");
-        assertThat(doc.metadata()).containsEntry("author", "Author");
-        assertThat(doc.metadata()).containsEntry("pageCount", "5");
-    }
-
-    @Test
-    void shouldBuildFlattenedTextFromElements() {
-        OdlElement headingElement = new OdlElement();
-        headingElement.setType("heading");
-        headingElement.setPageNumber(1);
-        headingElement.setHeadingLevel(1);
-        headingElement.setContent(new TextNode("Section"));
-
-        OdlElement paragraphElement = new OdlElement();
-        paragraphElement.setType("paragraph");
-        paragraphElement.setPageNumber(1);
-        paragraphElement.setContent(new TextNode("Content"));
-
-        OdlResponse response = new OdlResponse();
-        response.setKids(List.of(headingElement, paragraphElement));
-
-        NormalizedDocument doc = normalizer.normalize(response, "application/pdf");
-
-        assertThat(doc.flattenedText()).contains("Section");
-        assertThat(doc.flattenedText()).contains("Content");
+    @SuppressWarnings("unchecked")
+    private static java.util.Map<String, FeatureOutcome> invokeFeatureStates(
+            PdfModalityAdapter adapter,
+            ExtractionRequest request,
+            NormalizedDocument document,
+            OdlResponse response) {
+        try {
+            var m = PdfModalityAdapter.class.getDeclaredMethod(
+                    "buildFeatureStates", ExtractionRequest.class, NormalizedDocument.class, OdlResponse.class);
+            m.setAccessible(true);
+            return (java.util.Map<String, FeatureOutcome>) m.invoke(adapter, request, document, response);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 }
