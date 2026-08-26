@@ -23,8 +23,14 @@ dependencies {
 
     // Spring Boot
     implementation(libs.spring.boot.starter)
-    implementation(libs.spring.boot.starter.jdbc)
+    implementation(libs.spring.boot.starter.web)
     implementation(libs.spring.boot.starter.actuator)
+    implementation(libs.spring.boot.starter.jdbc)
+
+    // PostgreSQL + Flyway
+    implementation(libs.postgresql)
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.postgresql)
 
     // gRPC server transport
     implementation(libs.grpc.netty.shaded)
@@ -32,13 +38,14 @@ dependencies {
     implementation(libs.grpc.stub)
     compileOnly(libs.javax.annotation)
 
-    // Persistence
-    implementation(libs.flyway.core)
-    implementation(libs.flyway.postgresql)
-    runtimeOnly(libs.postgresql)
+    // Object storage (MinIO via S3 API)
+    implementation(libs.aws.s3)
 
-    // JSON (result payload serialization in DB)
+    // JSON (payload digest / mapping helpers)
     implementation(libs.jackson.databind)
+
+    // Micrometer (Prometheus via actuator)
+    implementation(libs.micrometer.core)
 
     // Logging
     implementation(libs.logback.classic)
@@ -56,6 +63,8 @@ dependencies {
     testImplementation(libs.grpc.inprocess)
     testImplementation(libs.grpc.testing)
 
+    testImplementation(libs.archunit.junit5)
+
     // In-memory H2 for unit tests that touch the store
     testImplementation(libs.h2)
 
@@ -70,4 +79,13 @@ dependencies {
 
 tasks.named<Test>("test") {
     useJUnitPlatform()
+}
+
+tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
+    archiveBaseName.set("extraction-gateway")
+    mainClass.set("synanton.extraction.ExtractionGatewayApplication")
+}
+
+tasks.named<Jar>("jar") {
+    enabled = false
 }

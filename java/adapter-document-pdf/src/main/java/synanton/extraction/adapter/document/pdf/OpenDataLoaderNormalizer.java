@@ -70,44 +70,52 @@ public class OpenDataLoaderNormalizer {
         return meta;
     }
 
+    private ContentOrigin mapOrigin(OdlElement kid) {
+        if (kid.getContentOrigin() != null && kid.getContentOrigin().equalsIgnoreCase("ocr")) {
+            return ContentOrigin.OCR;
+        }
+        return ContentOrigin.EMBEDDED_TEXT;
+    }
+
     private NormalizedElement mapElement(OdlElement kid, int index) {
         String elementId = "p" + kid.getPageNumber() + "-e" + (index + 1);
         ElementBounds bounds = mapBounds(kid);
+        ContentOrigin origin = mapOrigin(kid);
 
         return switch (kid.getType() != null ? kid.getType().toLowerCase() : "") {
             case "heading" -> new NormalizedElement(
                     elementId, ElementType.HEADING, bounds,
-                    extractText(kid.getContent()), ContentOrigin.EMBEDDED_TEXT,
+                    extractText(kid.getContent()), origin,
                     kid.getHeadingLevel() > 0 ? kid.getHeadingLevel() : 1,
                     List.of(), Map.of(), null);
 
             case "paragraph", "text" -> new NormalizedElement(
                     elementId, ElementType.PARAGRAPH, bounds,
-                    extractText(kid.getContent()), ContentOrigin.EMBEDDED_TEXT,
+                    extractText(kid.getContent()), origin,
                     0, List.of(), Map.of(), null);
 
-            case "table" -> mapTable(kid, elementId, bounds);
+            case "table" -> mapTable(kid, elementId, bounds, origin);
 
             case "picture", "image", "figure" -> new NormalizedElement(
                     elementId, ElementType.IMAGE, bounds,
-                    null, ContentOrigin.EMBEDDED_TEXT,
+                    null, origin,
                     0, List.of(), Map.of(),
                     kid.getDescription());
 
             case "formula", "equation" -> new NormalizedElement(
                     elementId, ElementType.FORMULA, bounds,
-                    null, ContentOrigin.EMBEDDED_TEXT,
+                    null, origin,
                     0, List.of(), Map.of(),
                     extractText(kid.getContent()));
 
             case "list" -> new NormalizedElement(
                     elementId, ElementType.LIST, bounds,
-                    extractText(kid.getContent()), ContentOrigin.EMBEDDED_TEXT,
+                    extractText(kid.getContent()), origin,
                     0, List.of(), Map.of(), null);
 
             case "caption" -> new NormalizedElement(
                     elementId, ElementType.CAPTION, bounds,
-                    extractText(kid.getContent()), ContentOrigin.EMBEDDED_TEXT,
+                    extractText(kid.getContent()), origin,
                     0, List.of(), Map.of(), null);
 
             default -> {
@@ -115,13 +123,14 @@ public class OpenDataLoaderNormalizer {
                 if (text == null || text.isBlank()) yield null;
                 yield new NormalizedElement(
                         elementId, ElementType.PARAGRAPH, bounds,
-                        text, ContentOrigin.EMBEDDED_TEXT,
+                        text, origin,
                         0, List.of(), Map.of(), null);
             }
         };
     }
 
-    private NormalizedElement mapTable(OdlElement kid, String elementId, ElementBounds bounds) {
+    private NormalizedElement mapTable(OdlElement kid, String elementId, ElementBounds bounds,
+                                       ContentOrigin origin) {
         JsonNode contentNode = kid.getContent();
         if (contentNode == null || contentNode.isNull()) {
             return new NormalizedElement(elementId, ElementType.TABLE, bounds, null,
@@ -143,7 +152,7 @@ public class OpenDataLoaderNormalizer {
         }
 
         return new NormalizedElement(elementId, ElementType.TABLE, bounds,
-                tableText.toString().trim(), ContentOrigin.EMBEDDED_TEXT,
+                tableText.toString().trim(), origin,
                 0, List.of(), Map.of(), null);
     }
 

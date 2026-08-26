@@ -45,6 +45,8 @@ public class TextModalityAdapter implements ModalityAdapter {
 
     private static final Set<String> SUPPORTED_TYPES = Set.of(
             "text/plain",
+            "text/markdown",
+            "text/x-markdown",
             "text/html",
             "text/csv",
             "text/xhtml+xml",
@@ -160,10 +162,8 @@ public class TextModalityAdapter implements ModalityAdapter {
                 || "text/xhtml+xml".equals(request.mediaType());
         states.put("layout", isStructured ? FeatureOutcome.APPLIED : FeatureOutcome.NOT_APPLICABLE);
 
-        // OCR is not needed for digital-text formats.
-        states.put("ocr", Boolean.TRUE.equals(options.ocr())
-                ? FeatureOutcome.NOT_APPLICABLE
-                : FeatureOutcome.NOT_REQUESTED);
+        // OCR is not applicable to digital-text formats.
+        states.put("ocr", FeatureOutcome.NOT_APPLICABLE);
 
         // Table extraction is not implemented in this adapter.
         states.put("tables", Boolean.TRUE.equals(options.tables())

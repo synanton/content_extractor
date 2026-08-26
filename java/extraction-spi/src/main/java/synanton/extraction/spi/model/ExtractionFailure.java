@@ -42,4 +42,28 @@ public record ExtractionFailure(String errorCode, String diagnostic) {
                 "ERROR_OBJECT_NOT_FOUND",
                 "Source object not found: " + ref);
     }
+
+    public static ExtractionFailure objectChanged(String diagnostic) {
+        return new ExtractionFailure("ERROR_OBJECT_CHANGED", diagnostic);
+    }
+
+    public static ExtractionFailure invalidObjectReference(String diagnostic) {
+        return new ExtractionFailure("ERROR_INVALID_OBJECT_REFERENCE", diagnostic);
+    }
+
+    public static ExtractionFailure invalidRequest(String diagnostic) {
+        return new ExtractionFailure("ERROR_INVALID_REQUEST", diagnostic);
+    }
+
+    public static ExtractionFailure timeout(String diagnostic) {
+        return new ExtractionFailure("ERROR_TIMEOUT", diagnostic);
+    }
+
+    public static ExtractionFailure expired(String diagnostic) {
+        return new ExtractionFailure("ERROR_EXPIRED", diagnostic);
+    }
+
+    public static ExtractionFailure internalError(String diagnostic) {
+        return new ExtractionFailure("ERROR_INTERNAL_ERROR", diagnostic);
+    }
 }

@@ -21,4 +21,13 @@ public interface SourceObjectReader {
      * @throws IOException if the object cannot be opened (e.g. not found, access denied, I/O error)
      */
     InputStream read(ObjectRef ref) throws IOException;
+
+    /**
+     * Returns the object size from storage metadata without downloading the body.
+     *
+     * @param ref the object storage reference
+     * @return size in bytes
+     * @throws IOException if the object cannot be probed
+     */
+    long contentLength(ObjectRef ref) throws IOException;
 }

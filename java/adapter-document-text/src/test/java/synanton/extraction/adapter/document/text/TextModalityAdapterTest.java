@@ -60,6 +60,11 @@ class TextModalityAdapterTest {
     }
 
     @Test
+    void shouldReturnTrueForTextMarkdown() {
+        assertThat(ADAPTER.supports("text/markdown")).isTrue();
+    }
+
+    @Test
     void shouldReturnTrueForTextHtml() {
         assertThat(ADAPTER.supports("text/html")).isTrue();
     }
@@ -109,15 +114,24 @@ class TextModalityAdapterTest {
     }
 
     @Test
-    void shouldReportOcrNotRequestedWhenOcrOptionIsNull() throws Exception {
-        ExtractionOptions options = ExtractionOptions.defaults(); // ocr == null
+    void shouldReportOcrNotApplicableForPlainText() throws Exception {
+        ExtractionOptions options = ExtractionOptions.defaults();
         AdapterResult result = ADAPTER.extract(
                 requestFor("text/plain", options),
                 streamOf("sample text")
         );
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.featureStates()).containsEntry("ocr", FeatureOutcome.NOT_REQUESTED);
+        assertThat(result.featureStates()).containsEntry("ocr", FeatureOutcome.NOT_APPLICABLE);
+    }
+
+    @Test
+    void shouldFlattenPlainTextMatchingSource() throws Exception {
+        String content = "Line one\n\nLine two";
+        AdapterResult result = ADAPTER.extract(requestFor("text/plain"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.document().flattenedText()).isEqualTo("Line one\nLine two");
     }
 
     @Test

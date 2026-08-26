@@ -1,0 +1,50 @@
+spring:
+  application:
+    name: extraction-gateway
+  datasource:
+    url: ${EXTRACTION_DB_URL:jdbc:postgresql://localhost:5432/extraction}
+    username: ${EXTRACTION_DB_USER:extraction}
+    password: ${EXTRACTION_DB_PASSWORD:extraction}
+  flyway:
+    enabled: true
+
+server:
+  port: ${EXTRACTION_GATEWAY_HTTP_PORT:8092}
+
+extraction-gateway:
+  grpc-port: ${EXTRACTION_GATEWAY_GRPC_PORT:9091}
+  max-inbound-message-size-bytes: ${EXTRACTION_GATEWAY_MAX_MSG_BYTES:4259840}
+  limits:
+    max-object-bytes: ${EXTRACTION_MAX_OBJECT_BYTES:268435456}
+    max-duration-seconds: ${EXTRACTION_MAX_DURATION_SECONDS:900}
+    max-payload-bytes: ${EXTRACTION_MAX_PAYLOAD_BYTES:67108864}
+    max-sync-object-bytes: ${EXTRACTION_MAX_SYNC_OBJECT_BYTES:10485760}
+  objectstore:
+    endpoint: ${EXTRACTION_OBJECTSTORE_ENDPOINT:http://minio:9000}
+    access-key: ${EXTRACTION_OBJECTSTORE_ACCESS_KEY:minioadmin}
+    secret-key: ${EXTRACTION_OBJECTSTORE_SECRET_KEY:minioadmin}
+    region: ${EXTRACTION_OBJECTSTORE_REGION:us-east-1}
+    path-style-access: true
+  async:
+    max-concurrent-operations-per-tenant: ${EXTRACTION_MAX_CONCURRENT_PER_TENANT:10}
+    worker-poll-interval-ms: ${EXTRACTION_WORKER_POLL_INTERVAL_MS:500}
+    lease-timeout-seconds: ${EXTRACTION_LEASE_TIMEOUT_SECONDS:300}
+
+extraction:
+  processors:
+    opendataloader:
+      base-url: ${EXTRACTION_OPENDATALOADER_BASE_URL:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    synanton.extraction: INFO
+    io.grpc: WARN

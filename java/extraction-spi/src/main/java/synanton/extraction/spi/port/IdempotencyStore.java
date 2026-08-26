@@ -12,23 +12,30 @@ import java.util.Optional;
 public interface IdempotencyStore {
 
     /**
-     * Looks up the operation ID previously recorded for the given tenant and idempotency key.
+     * An idempotency record associating a tenant-scoped key with an operation and request fingerprint.
+     *
+     * @param operationId  the platform-assigned operation identifier
+     * @param requestHash  canonical hash of the immutable submit semantics
+     */
+    record Entry(String operationId, String requestHash) {
+    }
+
+    /**
+     * Looks up the idempotency record for the given tenant and key.
      *
      * @param tenantId       the tenant scope for the lookup
      * @param idempotencyKey the caller-supplied idempotency key
-     * @return an {@link Optional} containing the operation ID if a record exists, or empty
+     * @return an {@link Optional} containing the record if one exists, or empty
      */
-    Optional<String> findOperationId(String tenantId, String idempotencyKey);
+    Optional<Entry> findEntry(String tenantId, String idempotencyKey);
 
     /**
-     * Records a mapping from a tenant-scoped idempotency key to an operation ID.
-     *
-     * <p>Implementations must be idempotent: storing the same mapping twice must not produce
-     * an error.
+     * Records a mapping from a tenant-scoped idempotency key to an operation ID and request hash.
      *
      * @param tenantId       the tenant scope for the record
      * @param idempotencyKey the caller-supplied idempotency key
+     * @param requestHash    canonical hash of the immutable submit semantics
      * @param operationId    the platform-assigned operation ID to associate with the key
      */
-    void store(String tenantId, String idempotencyKey, String operationId);
+    void store(String tenantId, String idempotencyKey, String requestHash, String operationId);
 }

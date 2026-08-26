@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class PdfAdapterConfiguration {
 
-    @Value("${extraction.processors.opendataloader.base-url:}")
+    @Value("${extraction.processors.opendataloader.base-url}")
     private String openDataLoaderBaseUrl;
 
     @Bean

@@ -409,6 +409,14 @@ message ResultProvenance {
     google.protobuf.Timestamp extracted_at = 4;
 }
 
+// ResourceUsage reports wall-clock and CPU time plus byte/char volumes for one item.
+message ResourceUsage {
+    int64 wall_ms = 1;
+    int64 cpu_ns = 2;
+    int64 input_bytes = 3;
+    int64 output_chars = 4;
+}
+
 // ExtractionResult is the structured outcome for one item (§20).
 message ExtractionResult {
     string operation_id = 1;
@@ -436,6 +444,8 @@ message ExtractionResult {
     map<string, string> business_tags = 10;
 
     ExtractionError error = 11;
+
+    ResourceUsage usage = 12;
 }
 
 // ─── Status polling ──────────────────────────────────────────────────────────

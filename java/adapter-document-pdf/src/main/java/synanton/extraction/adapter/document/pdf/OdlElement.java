@@ -30,6 +30,10 @@ public class OdlElement {
     // Can be a String (text content) or an Object (table content with headers/rows)
     private JsonNode content;
 
+    // Optional provenance hint from OpenDataLoader (e.g. "ocr", "embedded")
+    @JsonAlias("content origin")
+    private String contentOrigin;
+
     // For picture/image elements
     private String description;
 }
