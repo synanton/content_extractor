@@ -47,7 +47,7 @@ service ExtractionService {
     //
     // If the caller's stream closes before the response arrives, the plane does
     // NOT cancel the work. Callers MUST reconcile via GetOperations rather than
-    // resubmitting blindly — resubmission with the same idempotency_key is
+    // resubmitting blindly - resubmission with the same idempotency_key is
     // safe, resubmission with a fresh key duplicates expensive work (§13).
     rpc SubmitExtraction(SubmitExtractionRequest) returns (ExtractionOperation);
 
@@ -223,7 +223,7 @@ message ObjectReference {
 // ExtractionOptions expresses WHAT should be extracted, never HOW (§8).
 //
 // Every option is `optional` on purpose: the contract must distinguish
-// "unset — plane decides" from "explicitly false — do not do this". A plain
+// "unset - plane decides" from "explicitly false - do not do this". A plain
 // bool cannot express that, and the difference is load-bearing. Requesting OCR
 // on a digital PDF should yield NOT_APPLICABLE, whereas leaving it unset should
 // let the plane decide; a scanned page with ocr=false must NOT be OCR'd.
@@ -334,7 +334,7 @@ message SubmitExtractionBatchRequest {
 //
 // INVARIANT: `code` is drawn from the fixed catalogue and is the ONLY field a
 // consumer may branch on. `diagnostic` carries implementation detail for
-// operators and MUST NOT be parsed — that would turn an internal detail into a
+// operators and MUST NOT be parsed - that would turn an internal detail into a
 // de-facto contract.
 message ExtractionError {
     ExtractionErrorCode code = 1;
