@@ -1,254 +1,1157 @@
 # Synanton Content Extractor
 
-[![Status](https://img.shields.io/badge/Status-SCEP--2%20ExtractSync-blue)](https://github.com/Synanton/content_extractor)
+[![Status](https://img.shields.io/badge/Status-SCEP--3%20Contract-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
 [![gRPC](https://img.shields.io/badge/gRPC-Protobuf-purple)](https://grpc.io/)
 
-## Overview
+**Structured content extraction infrastructure for the Synanton Knowledge Platform.**
 
-The **Content Extractor** implements the Synanton **Structured Content Extraction Plane**: the
-boundary between raw content and structured content that Synanton knowledge processing can consume.
+The Synanton Content Extractor implements the **Structured Content Extraction Plane (SCEP)**: the boundary between raw enterprise content and structured content that downstream Synanton knowledge processing can consume.
 
-It answers one question:
+It answers one fundamental question:
 
 > **What is present in this artifact, and what structure can be reliably extracted from it?**
 
-What the extracted content *means* in a business domain is a separate concern, handled downstream by
-the platform.
+The extraction plane is deliberately separated from knowledge processing. It extracts and structures observable content; downstream Synanton components determine what that content means in a business domain.
 
-### Architectural Invariant
+------
 
-- **Synanton Platform** determines **WHAT** must be extracted (content selection, requested
-  features, priority intent, deadlines).
-- **Content Extractor** determines **HOW** extraction is performed (processor selection, routing,
-  scheduling, admission).
-- **Deployment topology** determines **WHERE** it runs — and is a scaling concern that MUST NOT
-  change the contract.
+## Overview
 
-> **Critical constraint:** the platform MUST NOT be able to discover which parser, library,
-> accelerator, worker, or queue performed the work. The `synanton.extraction.v1` gRPC contract is
-> the sole surface visible to it.
+Enterprise content arrives in many forms:
 
-The plane is deliberately a **black box**. It may route a request to a PDF extractor, Tika,
-OpenDataLoader, an OCR service, a transcription service, an image or video analyzer, or another
-extraction cluster entirely. None of that is visible through the contract.
+- Documents — PDF, TXT, EPUB, HTML
+- Audio — recordings, meetings, conversations
+- Images — scans, screenshots, photographs, diagrams
+- Video — recordings, presentations, demonstrations, short clips
 
----
+Each modality contains structure that can be lost when content is reduced to plain text.
 
-## Current Status
+The Structured Content Extraction Plane preserves that structure and exposes it through a stable, deployment-neutral contract.
 
-**SCEP-2 ExtractSync PoC is in progress on this branch.** SCEP-1 (contract) is complete.
-`extraction-gateway` now serves `ExtractSync` and `GetCapabilities`. Async RPCs return
-`UNIMPLEMENTED`. PDF goes through an HTTP OpenDataLoader sidecar when configured; otherwise PDF
-is declined with `UNSUPPORTED` and the platform may fall back to Tika.
+```text
+                           SYNANTON
+                              │
+                              │ extraction contract
+                              ▼
+                 ┌─────────────────────────────┐
+                 │ Structured Content          │
+                 │ Extraction Plane            │
+                 │                             │
+                 │          BLACK BOX          │
+                 └──────────────┬──────────────┘
+                                │
+              ┌─────────────────┼──────────────────┐
+              │                 │                  │
+              ▼                 ▼                  ▼
+          Documents           Audio            Images / Video
+              │                 │                  │
+        ┌─────┼─────┐       ┌───┼────┐       ┌────┼─────┐
+        │     │     │       │   │    │       │    │     │
+       text layout tables  ASR diarization  OCR  VLM  scenes
+        │     │     │       │   │    │       │    │     │
+        └─────┴─────┘       └───┴────┘       └────┴─────┘
+              │                 │                  │
+              └─────────────────┼──────────────────┘
+                                ▼
+                     StructuredPayload
+                                │
+                                ▼
+                       Knowledge Platform
+```
 
-| Phase | Name | Status |
-|-------|------|--------|
-| SCEP-1 | Contract | ✅ Done |
-| SCEP-2 | Extraction plane skeleton + sync path | ✅ ExtractSync PoC (no PostgreSQL operation store) |
-| SCEP-3 | PDF PoC (OpenDataLoader) | 🔶 HTTP adapter present; feature-state honesty incomplete |
-| SCEP-4 | Async operation model | Planned |
-| SCEP-5 | Platform integration | 🔶 synflux `ExtractionStage` calls ExtractSync; no `extraction-client` module |
-| SCEP-6 | Topology equivalence + hardening | Planned |
-| SCEP-7 | Multimodal expansion (audio/image/video) | Post-v1.21 |
+------
 
-The full plan lives in the platform repository at
-`docs/implementation/content-extraction-plane/INDEX.md`.
+## Architectural Position
 
----
+The extraction plane sits between raw content storage and knowledge processing.
 
-## Architecture
+```text
+Source Systems
+(FileNet, SharePoint, local FS, ...)
+          │
+          ▼
+      Lucentrix
+   source retrieval
+          │
+          ▼
+   Content Objects
+      Object Storage
+          │
+          ▼
+┌──────────────────────────────┐
+│ Structured Content           │
+│ Extraction Plane             │
+│                              │
+│          BLACK BOX           │
+└──────────────┬───────────────┘
+               │
+               ▼
+      StructuredPayload
+               │
+       ┌───────┴────────┐
+       ▼                ▼
+ flattenedText     structured data
+       │                │
+       └────────┬───────┘
+                ▼
+       Knowledge Processing
+```
 
-### Layering
+The separation is intentional:
 
-The implementation is split into three layers. This separation is the key design decision: it is
-what lets the processor change without the contract changing.
+**Extraction asks:**
+
+> What can be extracted from the content?
+
+**Knowledge processing asks:**
+
+> What does the extracted content mean?
+
+The extraction plane therefore does **not** become an ontology, entity-resolution, ranking, business-rule, or knowledge-graph service.
+
+------
+
+## Core Architectural Principle
+
+### Contract over topology
+
+The extraction contract is the architectural boundary.
+
+The implementation may be:
+
+```text
+Mode A — Embedded
+
+Synanton
+   │
+   └──► extractor
+Mode B — Co-located
+
+Synanton
+   │
+   └──► extraction component
+Mode C — Clustered
+
+Synanton
+   │
+   └──► extraction API
+            │
+            └──► workers
+Mode D — Distributed / delegated
+
+Synanton
+   │
+   └──► extraction API
+            │
+            ├──► extractor A
+            │       │
+            │       └──► extractor B
+            │
+            └──► extractor C
+```
+
+These deployments are **contractually equivalent**.
+
+> Deployment topology is a scaling and implementation concern, not an API concern.
+
+Synanton must not need to know which parser, library, worker, accelerator, queue, scheduler, or downstream extractor performed the work.
+
+------
+
+## Structure Before Meaning
+
+The extraction plane preserves observable structure before applying interpretation.
+
+A PDF should not simply become one large string:
+
+```text
+document
+ ├── page
+ │    ├── heading
+ │    ├── paragraph
+ │    ├── table
+ │    ├── image
+ │    ├── caption
+ │    └── formula
+ └── page
+```
+
+A conversation should preserve temporal and speaker structure:
+
+```text
+conversation
+ ├── utterance
+ │    ├── speaker
+ │    ├── start
+ │    ├── end
+ │    ├── text
+ │    ├── pause-before
+ │    └── pause-after
+ │
+ └── relationships
+      └── overlap
+```
+
+A video can preserve:
+
+```text
+video
+ ├── metadata
+ ├── audio
+ ├── transcription
+ ├── OCR
+ ├── key frames
+ ├── scenes
+ └── short clips
+```
+
+This structure becomes evidence that downstream processing can reason over rather than reconstruct later.
+
+------
+
+# Content Domains
+
+The initial SCEP model covers five major domains.
+
+| Domain         | Typical inputs               | Primary extraction                | Optional enrichment                                       |
+| -------------- | ---------------------------- | --------------------------------- | --------------------------------------------------------- |
+| **Documents**  | PDF, TXT, EPUB, HTML         | text, structure, layout, metadata | OCR, tables, formulas, image descriptions, summaries      |
+| **Audio**      | WAV, MP3, M4A, meetings      | transcription, timestamps         | diarization, pauses, overlap, conversation summaries      |
+| **Images**     | PNG, JPEG, TIFF, screenshots | metadata, dimensions, OCR         | image/scene description, chart interpretation             |
+| **Video**      | MP4, WebM, MOV               | metadata, streams, key frames     | transcription, OCR, scene detection, short-clip summaries |
+| **Multimodal** | mixed artifacts              | cross-modal structure             | LLM/VLM enrichment and derived representations            |
+
+The contract is designed so that new modalities can be introduced without changing the core extraction boundary.
+
+------
+
+# Document Extraction
+
+Document extraction covers:
+
+- PDF
+- plain text
+- EPUB
+- HTML
+
+The objective is to preserve document structure rather than flattening everything immediately.
+
+Typical extracted elements include:
+
+```text
+Document
+ ├── metadata
+ ├── page
+ │    ├── heading
+ │    ├── paragraph
+ │    ├── list
+ │    ├── table
+ │    ├── image
+ │    ├── caption
+ │    └── formula
+ └── relationships
+```
+
+Optional features include:
+
+- OCR
+- layout preservation
+- reading order
+- table extraction
+- embedded image extraction
+- formula extraction
+- image descriptions
+- document summaries
+
+------
+
+## PDF Extraction PoC
+
+The first concrete processor integration is the **OpenDataLoader PDF** path.
+
+The PoC uses OpenDataLoader to investigate normalized extraction of PDF elements such as:
+
+```text
+heading
+paragraph
+table
+picture
+formula
+caption
+...
+```
+
+A representative processor output can contain:
+
+```json
+{
+  "type": "paragraph",
+  "id": 2,
+  "pageNumber": 1,
+  "boundingBox": [72.0, 640.0, 540.0, 690.0],
+  "content": "The extraction plane converts raw enterprise content into structured representations."
+}
+```
+
+Tables can preserve their semantic structure:
+
+```json
+{
+  "type": "table",
+  "id": 18,
+  "pageNumber": 2,
+  "content": {
+    "headers": ["Feature", "Purpose"],
+    "rows": [
+      ["OCR", "Extract text from scanned pages"],
+      ["Layout", "Preserve document reading order"],
+      ["Tables", "Preserve tabular structure"]
+    ]
+  }
+}
+```
+
+Images and formulas can remain explicit extraction elements rather than being discarded during text conversion.
+
+The processor-specific representation is normalized into a Synanton document payload.
+
+```json
+{
+  "schema": {
+    "id": "synanton.document",
+    "version": "1.0"
+  },
+  "source": {
+    "contentRefId": "01J-PDF-0001",
+    "mediaType": "application/pdf",
+    "sha256": "abc123..."
+  },
+  "features": {
+    "text": "applied",
+    "layout": "applied",
+    "tables": "applied",
+    "images": "applied",
+    "ocr": "partial",
+    "formulas": "applied",
+    "image-description": "applied"
+  }
+}
+```
+
+The OpenDataLoader output is therefore an **implementation detail**. The Synanton normalized representation is the contract.
+
+------
+
+# Audio Extraction
+
+Audio extraction preserves the temporal structure of conversations.
+
+Primary extraction:
+
+- transcription
+- timestamps
+- utterances
+
+Optional enrichment:
+
+- speaker diarization
+- pauses
+- simultaneous speech / overlap
+- language identification
+- conversation summaries
+
+A conversation can be represented as:
+
+```json
+{
+  "conversation": {
+    "utterances": [
+      {
+        "id": "u021",
+        "speakerId": "speaker-1",
+        "startMs": 10200,
+        "endMs": 13800,
+        "text": "The important part is—"
+      },
+      {
+        "id": "u022",
+        "speakerId": "speaker-2",
+        "startMs": 12900,
+        "endMs": 15200,
+        "text": "Yes, but the contract—"
+      }
+    ],
+    "relationships": [
+      {
+        "type": "overlap",
+        "source": "u021",
+        "target": "u022",
+        "startMs": 12900,
+        "endMs": 13800
+      }
+    ]
+  }
+}
+```
+
+This preserves evidence that two participants were speaking simultaneously.
+
+### Conversation summaries
+
+Summarization is an **enrichment stage**, not a replacement for the transcript.
+
+```text
+audio
+ │
+ ├── acoustic analysis
+ ├── transcription
+ ├── diarization
+ ├── pause / overlap detection
+ │
+ └── structured conversation
+          │
+          └── LLM summary
+```
+
+Generated summaries should retain references to the extracted utterances that support them.
+
+------
+
+# Image Extraction
+
+Image processing separates deterministic extraction from LLM/VLM interpretation.
+
+```text
+image
+ │
+ ├── metadata
+ ├── dimensions
+ ├── EXIF where permitted
+ ├── OCR
+ │
+ └── VLM enrichment
+       ├── image description
+       ├── object interpretation
+       ├── scene interpretation
+       └── chart interpretation
+```
+
+Example:
+
+```json
+{
+  "type": "image",
+  "mediaType": "image/jpeg",
+  "width": 1920,
+  "height": 1080,
+  "ocr": {
+    "text": "Q3 Revenue: €4.2M",
+    "regions": [
+      {
+        "text": "Q3 Revenue: €4.2M",
+        "bbox": [220, 90, 780, 170],
+        "confidence": 0.97
+      }
+    ]
+  },
+  "description": {
+    "text": "A presentation slide containing a Q3 revenue headline and a bar chart."
+  }
+}
+```
+
+LLM/VLM-generated descriptions are typed extraction artifacts with provenance rather than silently becoming canonical business knowledge.
+
+------
+
+# Video Extraction
+
+Video extraction combines temporal, visual, audio, and textual structure.
+
+```text
+video
+ │
+ ├── metadata
+ ├── audio stream
+ │     └── transcription
+ │
+ ├── key frames
+ │     └── OCR / image analysis
+ │
+ ├── scene detection
+ │     └── scene descriptions
+ │
+ └── short clips
+       └── clip-level summaries
+```
+
+Typical capabilities include:
+
+- video metadata
+- audio extraction
+- transcription
+- OCR
+- key-frame extraction
+- scene detection
+- speaker information
+- short-clip generation
+- scene/clip summaries
+
+The result can therefore represent both **what happened over time** and **what was visible or spoken within each interval**.
+
+------
+
+# LLM and VLM Enrichment
+
+LLMs and VLMs may be used where deterministic extraction is insufficient.
+
+Examples:
+
+- describe an image
+- describe a chart
+- summarize a conversation
+- identify a video scene
+- interpret visual content
+- generate a short clip description
+
+The rule is:
+
+> **Generated interpretation is an extraction artifact, not canonical business knowledge.**
+
+Generated content should retain provenance and, where applicable, confidence and source references.
+
+```text
+Raw Content
+     │
+     ▼
+Deterministic Extraction
+     │
+     ▼
+Structured Evidence
+     │
+     ├──► LLM/VLM enrichment
+     │         │
+     │         ▼
+     │    Derived Artifact
+     │
+     ▼
+Knowledge Processing
+```
+
+------
+
+# Feature Tags
+
+Extraction requests can express requested capabilities using typed options and/or feature tags.
+
+Examples:
+
+```text
+document=layout
+document=tables
+document=ocr
+document=formulas
+document=image-description
+
+audio=transcription
+audio=diarization
+audio=pauses
+audio=overlap
+audio=summary
+
+image=ocr
+image=description
+image=chart-analysis
+
+video=transcription
+video=ocr
+video=scenes
+video=clips
+video=summary
+```
+
+Business metadata can travel with the request:
+
+```text
+department=legal
+document-type=contract
+ticket=T-100
+classification=internal
+```
+
+Business tags are preserved for downstream consumers but are not interpreted as business semantics by the extraction implementation.
+
+------
+
+# Feature State
+
+A requested feature must never be considered successful merely because it was requested.
+
+The result explicitly reports what happened.
+
+```text
+REQUESTED
+    │
+    ▼
+SUPPORTED?
+    │
+ ┌──┴───────────────┐
+ │                  │
+yes                no
+ │                  │
+ ▼                  ▼
+execution       UNSUPPORTED
+ │
+ ├── APPLIED
+ ├── PARTIAL
+ ├── NOT_APPLICABLE
+ └── FAILED
+```
+
+For example:
+
+```json
+{
+  "features": {
+    "ocr": "applied",
+    "layout": "applied",
+    "tables": "partial",
+    "formulas": "not_applicable",
+    "image-description": "applied"
+  }
+}
+```
+
+This prevents silent feature loss and allows consumers to distinguish unsupported capabilities from extraction failures.
+
+------
+
+# Source Authority and Provenance
+
+The raw source artifact remains authoritative.
+
+The extraction plane:
+
+- reads source content;
+- never modifies the source artifact;
+- preserves the source reference;
+- records source checksum;
+- identifies media type;
+- records extraction time;
+- identifies schema/version;
+- records processor information;
+- records payload digest.
+
+A structured result can therefore be traced back to the source artifact and the representation that produced it.
+
+```text
+Source Object
+     │
+     ├── contentRefId
+     ├── object reference
+     ├── media type
+     └── SHA-256
+           │
+           ▼
+     Extraction Operation
+           │
+           ▼
+     Structured Payload
+           │
+           ├── schema
+           ├── processor
+           ├── payload digest
+           └── extraction timestamp
+```
+
+------
+
+# Extraction Contract
+
+The external API is exposed through:
+
+```text
+synanton.extraction.v1
+```
+
+The contract defines requests, operations, results, capabilities, feature states, and errors without exposing implementation topology.
+
+## Object References
+
+Large content is referenced through object storage rather than transported through the extraction API.
+
+Conceptually:
+
+```text
+ObjectReference
+ ├── bucket
+ ├── key
+ ├── version
+ ├── sha256
+ └── size
+```
+
+This keeps the API independent of content size and transport implementation.
+
+------
+
+## Extraction Options
+
+Options use explicit semantics.
+
+Typical options include:
+
+```text
+ocr
+transcription
+layout
+tables
+embeddedImages
+sceneAnalysis
+language
+preflight
+```
+
+Options are intentionally independent of the processor implementation.
+
+For example:
+
+```text
+ocr = true
+```
+
+means:
+
+> OCR is requested.
+
+It does **not** mean:
+
+> a particular OCR engine must be used.
+
+The result reports whether OCR was actually applied.
+
+------
+
+# Asynchronous Operations
+
+Asynchronous extraction is a first-class contract.
+
+An extraction operation has an externally stable lifecycle:
+
+```text
+ACCEPTED
+   │
+   ▼
+QUEUED
+   │
+   ▼
+RUNNING
+   │
+   ├──► COMPLETED
+   ├──► PARTIAL
+   ├──► FAILED
+   ├──► CANCELLED
+   └──► EXPIRED
+```
+
+Progress is normalized:
+
+```text
+0.0 <= progress <= 1.0
+```
+
+Progress is advisory and may be based on pages, bytes, audio duration, video duration, or processing stages.
+
+------
+
+# Idempotency
+
+Asynchronous extraction requires idempotent submission.
+
+A client must be able to retry after a network failure without unintentionally creating duplicate expensive extraction work.
+
+```text
+same idempotency key
+        +
+same request
+        │
+        ▼
+same operation
+```
+
+This is particularly important for:
+
+- OCR
+- transcription
+- image analysis
+- video processing
+
+Reusing an idempotency key with materially different request parameters should be rejected.
+
+------
+
+# Expiration and Cancellation
+
+Expiration is a lifecycle outcome, not a technical failure.
+
+An operation that reaches its expiration boundary may become:
+
+```text
+STATUS_EXPIRED
+```
+
+rather than:
+
+```text
+STATUS_FAILED
+```
+
+Cancellation is best-effort:
+
+- before execution, work can be prevented;
+- while queued, admission/scheduling can be interrupted where possible;
+- while running, the plane may allow work to finish when cancellation is unsafe or more expensive than completion.
+
+------
+
+# Priority and Capacity
+
+Priority expresses **intent**, not topology.
+
+Supported classes may include:
+
+```text
+LOW
+NORMAL
+HIGH
+CRITICAL
+```
+
+The extraction plane determines how those priorities map to internal scheduling.
+
+Consumers must not infer:
+
+- a queue;
+- a worker pool;
+- CPU allocation;
+- GPU allocation;
+- scheduling algorithm.
+
+Capacity information is advisory and may be used for admission decisions or pre-flight estimation.
+
+------
+
+# Structured Payload
+
+Successful extraction produces a `StructuredPayload`.
+
+The payload may represent:
+
+- PDF structure
+- HTML structure
+- document structure
+- audio timelines
+- transcription
+- image/OCR structure
+- video scene structure
+- modality-specific derived artifacts
+
+Conceptually:
+
+```text
+StructuredPayload
+ ├── descriptor
+ │    ├── schemaId
+ │    ├── schemaVersion
+ │    ├── processorId
+ │    ├── processorVersion
+ │    ├── format
+ │    ├── schemaDigest
+ │    └── payloadDigest
+ │
+ └── content
+      └── modality-specific representation
+```
+
+Processor version and schema version remain independent.
+
+------
+
+# Flattened Text
+
+For modalities where textual extraction is meaningful, the result may expose:
+
+```text
+flattenedText
+```
+
+This provides a compatibility projection for generic text consumers.
+
+The structured representation remains the authoritative extraction result.
+
+Consumers that require structured content should not force the source artifact to be reprocessed merely to obtain text.
+
+------
+
+# Internal Processor Routing
+
+The extraction plane owns processor selection and internal routing.
+
+Examples:
+
+```text
+PDF
+ │
+ └──► OpenDataLoader
+```
+
+or:
+
+```text
+PDF
+ │
+ └──► detector
+       ├──► OCR extractor
+       ├──► PDF parser
+       └──► external extraction service
+```
+
+Audio may be routed to transcription and diarization infrastructure.
+
+Video may be routed to scene detection, vision, speech, and OCR processors.
+
+These implementation details are deliberately hidden from the Synanton platform.
+
+------
+
+# Architecture
+
+The implementation is organized around three layers.
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
-│  Synanton Extraction Contract                            │
-│  Request / Operation / Result / Tags / Errors            │
-│  (synanton.extraction.v1 — this repo + platform mirror)  │
+│ Synanton Extraction Contract                            │
+│ Request / Operation / Result / Tags / Errors            │
+│ synanton.extraction.v1                                  │
 └─────────────────────────┬────────────────────────────────┘
                           │
 ┌─────────────────────────▼────────────────────────────────┐
-│  Modality Adapters                                       │
-│  PDF │ Text │ EPUB │ HTML │ Audio │ Image │ Video        │
+│ Modality Adapters                                        │
+│ PDF │ Text │ EPUB │ HTML │ Audio │ Image │ Video        │
 └─────────────────────────┬────────────────────────────────┘
                           │
 ┌─────────────────────────▼────────────────────────────────┐
-│  Processor Implementations                               │
-│  OpenDataLoader │ OCR │ ASR │ diarization │ VLM │ ...    │
+│ Processor Implementations                                │
+│ OpenDataLoader │ OCR │ ASR │ Diarization │ VLM │ ...    │
 └──────────────────────────────────────────────────────────┘
 ```
 
-### Position in the platform
+The contract remains stable while modality adapters and processor implementations evolve independently.
+
+------
+
+# Repository Structure
+
+Current and planned modules:
+
+| Module                       | Status        | Purpose                                                |
+| ---------------------------- | ------------- | ------------------------------------------------------ |
+| `java/extraction-contract`   | **Active**    | Protobuf contract, request validation, error catalogue |
+| `java/extraction-gateway`    | Planned       | gRPC server, operation store, router, admission        |
+| `java/extraction-spi`        | Planned       | `ModalityAdapter` SPI and normalized payload model     |
+| `java/adapter-document-text` | Planned       | TXT, EPUB, HTML extraction                             |
+| `java/adapter-document-pdf`  | Planned / PoC | OpenDataLoader-backed PDF extraction                   |
+| `java/adapter-stubs`         | Planned       | Audio/image/video capability stubs                     |
+
+------
+
+# Contract API
+
+The `synanton.extraction.v1` service provides the following operations:
+
+| RPC                       | Purpose                                    |
+| ------------------------- | ------------------------------------------ |
+| `SubmitExtraction`        | Submit asynchronous extraction             |
+| `SubmitExtractionBatch`   | Submit multiple artifacts as one operation |
+| `ExtractSync`             | Extract small content synchronously        |
+| `GetOperations`           | Retrieve authoritative operation status    |
+| `ListCompletedOperations` | Cursor-based completion feed               |
+| `GetResult`               | Retrieve a completed structured result     |
+| `CancelOperation`         | Best-effort cancellation                   |
+| `GetCapacity`             | Advisory capacity information              |
+| `EstimateExtraction`      | Advisory pre-flight estimate               |
+| `GetCapabilities`         | Supported media types and features         |
+
+There are no webhook dependencies in v1.21. Completion can be observed through operation status and cursor-based polling.
+
+------
+
+# Contract Mirroring
+
+The protobuf contract is mirrored between this repository and the Synanton platform.
 
 ```text
-        Source Systems (FileNet, SharePoint, local FS)
-                          │
-                          ▼
-                     Lucentrix              ← how to retrieve content
-                          │
-                          ▼
-                  Content Objects (S3)
-                          │
-                          ▼
-        Structured Content Extraction Plane  ← how to structure it
-                          │
-                          ▼
-                  StructuredPayload
-                          │
-                          ▼
-                 Knowledge Platform          ← what it means
+content_extractor
+    │
+    └── java/extraction-contract/src/main/proto/
+
+platform
+    │
+    └── java/extraction-contract/src/main/proto/
 ```
 
----
+The copies must remain byte-identical.
 
-## Modules
-
-| Module | Purpose |
-|--------|---------|
-| `java/extraction-contract` | Owns the `synanton.extraction.v1` protobuf contract, the request validator, and the error catalogue. Depends on nothing in this repo or the platform. |
-| `java/extraction-spi` | `ModalityAdapter` SPI and normalized payload model. |
-| `java/extraction-gateway` | gRPC server: ExtractSync, GetCapabilities, MinIO `SourceObjectReader`, router, sandbox limits. |
-| `java/adapter-document-text` | plain text, markdown, EPUB, HTML (Tika). |
-| `java/adapter-document-pdf` | OpenDataLoader HTTP client; declines PDF when the sidecar URL is unset. |
-| `java/adapter-stubs` | audio/image/video capability-declining stubs. |
-
----
-
-## The Contract
-
-`synanton.extraction.v1` consists of two proto files:
-
-| File | Contents |
-|------|----------|
-| `extraction_service.proto` | `ExtractionService` (9 RPCs), request/operation/result messages, 6 enums |
-| `extraction_payload.proto` | `StructuredPayload` envelope, `DocumentPayload`, reserved audio/image/video payloads |
-
-### RPCs
-
-| RPC | Semantics |
-|-----|-----------|
-| `SubmitExtraction` | Async submit; returns an operation handle immediately |
-| `SubmitExtractionBatch` | Several artifacts as one operation |
-| `ExtractSync` | Small content, inline; same result model, same domain path |
-| `GetOperations` | Authoritative status poll by id; safe after any timeout |
-| `ListCompletedOperations` | Cursor-based completion feed for high-throughput consumers |
-| `GetResult` | Structured result for one completed item |
-| `CancelOperation` | Best-effort |
-| `GetCapacity` | Advisory; does **not** reserve |
-| `EstimateExtraction` | Advisory pre-flight estimate |
-| `GetCapabilities` | Supported media types and features |
-
-### Key contract properties
-
-**Content is referenced, never transported.** Requests carry an `ObjectReference`
-(bucket/key/version/sha256/size); the plane reads bytes from object storage directly.
-
-**Options are tri-state.** Every field in `ExtractionOptions` is `optional`, so the contract
-distinguishes *unset — plane decides* from *explicitly false — do not do this*. A scanned page with
-`ocr=false` must not be OCR'd; the same page with `ocr` unset leaves the decision to the plane.
-
-**Feature state is explicit.** `ocr = true` on a request says nothing about what happened. Results
-report `FEATURE_APPLIED`, `FEATURE_NOT_APPLICABLE`, `FEATURE_UNSUPPORTED`, `FEATURE_FAILED`, or
-`FEATURE_PARTIAL` per feature. A requested feature that was not applied is never reported as
-success by omission.
-
-**Priority is intent, not topology.** `PRIORITY_HIGH` does not name a queue, a pool, or an
-algorithm. A numeric priority is deliberately absent.
-
-**Expiry is a lifecycle outcome.** An operation past `expires_at` reports `STATUS_EXPIRED`, never
-`STATUS_FAILED`.
-
-**Errors are 13 fixed codes.** Consumers branch on `ExtractionErrorCode` and on
-`ExtractionErrorCatalogue.isRetryable(...)` — never on the `diagnostic` string, which is unstable
-operator detail by design.
-
-**No webhooks in v1.21.** Notification is operation id plus status and cursor polling.
-
----
-
-## Contract Mirroring
-
-The proto files are a **byte-identical mirror** of
-`platform/java/extraction-contract/src/main/proto/`. Both repositories generate their own stubs;
-neither depends on the other's build.
+Verify the mirror with:
 
 ```bash
-./scripts/verify-contract-mirror.sh                 # sibling checkout
-EXTRACTION_PEER_REPO=/path/to/platform ./scripts/verify-contract-mirror.sh
+./scripts/verify-contract-mirror.sh
 ```
 
-The check is wired into `check` and fails the build on divergence. Never edit one copy alone.
-
-The GPU contract (`synanton.gpu.v1`) is mirrored the same way between `platform` and `gpu-runtime`.
-This repository does not carry GPU protos.
-
-
----
-
-## Building
-
-Requires JDK 21. Gradle runs via the wrapper.
+For a sibling platform checkout:
 
 ```bash
-./gradlew :java:extraction-gateway:bootRun   # gRPC :9091, health HTTP :8092
-./gradlew build                                  # compile + test + verify mirror
-./gradlew :java:extraction-contract:generateProto  # regenerate stubs after a .proto change
-./gradlew test                                   # all tests
-./gradlew verifyContractMirror                   # mirror check only
+EXTRACTION_PEER_REPO=/path/to/platform \
+  ./scripts/verify-contract-mirror.sh
 ```
 
-### Tests
+Never modify one copy independently.
 
-Gateway and adapter tests live under `java/extraction-gateway` and `java/adapter-document-text`. Contract tests (43) remain in `java/extraction-contract`.
+------
 
-| Suite | Covers |
-|-------|--------|
-| `ExtractionRequestValidatorTest` | every documented field rule, including boundary values |
-| `ExtractionErrorCatalogueTest` | all 13 codes documented and classified; unknown codes are not retryable |
-| `ContractOpacityTest` | walks compiled descriptors; fails if the contract names a processor, library, or topology element |
-| `ExtractionServiceContractTest` | round-trip against an in-process mock plane |
+# Architectural Invariants
 
-### A note on validation
+The following rules are non-negotiable:
 
-Request validation is hand-written (`ExtractionRequestValidator`) rather than generated by
-protoc-gen-validate. The PGV plugin is not wired into either repository's build, so PGV annotations
-in the `.proto` would compile without complaint and validate **nothing** — a silent gap on requests
-that admit expensive work. The rules are documented per-field in the proto and enforced in Java at
-the service boundary, which is the same approach the platform's `PgvRuleCatalogue` takes.
+1. **Contract over topology** — embedded, co-located, clustered, and distributed deployments expose the same contract.
+2. **Black-box extraction** — the contract does not depend on processor or topology names.
+3. **Raw source authority** — extraction never modifies the source artifact.
+4. **Structure before meaning** — observable structure is preserved before semantic interpretation.
+5. **Structured payload extensibility** — modality-specific representations do not require expanding a universal document model.
+6. **Domain isolation** — extraction does not become knowledge processing.
+7. **Idempotency** — asynchronous submission is safely retryable.
+8. **Expiration** — asynchronous operations have explicit expiration semantics.
+9. **Capacity awareness** — the plane can reject or defer work when safe admission is impossible.
+10. **External priority** — priority expresses intent without exposing scheduling topology.
+11. **Explicit feature state** — requested, applied, partial, unsupported, failed, and not-applicable states remain distinguishable.
+12. **Opaque business metadata** — business tags are carried through without being interpreted as extraction semantics.
+13. **Async first-class** — asynchronous extraction is not a secondary implementation path.
+14. **Batch operations** — multiple content references can belong to one operation.
+15. **No webhook dependency** — v1.21 does not require callbacks for completion.
+16. **No topology leakage** — queues, workers, hardware, and routing remain implementation details.
+17. **Provenance** — structured and generated artifacts retain traceability to source evidence.
+18. **Extraction is not knowledge processing** — ontology, entity resolution, ranking, business semantics, and knowledge graphs remain downstream concerns.
 
----
+------
 
-## Architectural Rules
+# Current Status
 
-`.cursor/rules/extraction-rules.mdc` carries 18 non-negotiable invariants, enforced by review and
-by tests. The load-bearing ones:
+The repository is implementing the Structured Content Extraction Plane incrementally.
 
-1. Contract over topology — identical embedded or clustered
-2. Black-box extraction — no processor or topology names in the contract
-3. Raw source authority — the plane never modifies the source
-4. Domain isolation — `domain/` imports no protobuf, JDBC, Spring, or adapter
-5. PostgreSQL is the authoritative operation store; no Redis, Kafka, or Cassandra
-6. Idempotency required, fail-closed
-7. Feature state computed from what was produced, not what was requested
-8. Extraction is not knowledge processing
+| Phase      | Name                                         | Status       |
+| ---------- | -------------------------------------------- | ------------ |
+| **SCEP-1** | Extraction contract                          | ✅ Complete  |
+| **SCEP-2** | Extraction plane skeleton + synchronous path | ✅ Complete  |
+| **SCEP-3** | PDF extraction PoC with OpenDataLoader       | ✅ Complete  |
+| **SCEP-4** | Asynchronous operation model                 | Planned      |
+| **SCEP-5** | Synanton platform integration                | Planned      |
+| **SCEP-6** | Topology equivalence + hardening             | Planned      |
+| **SCEP-7** | Multimodal expansion: audio, image, video    | Post-v1.21   |
 
----
+The architecture is intentionally being established before committing the platform to a particular extraction implementation.
 
-## License
+------
+
+# Development
+
+Requires **JDK 21**.
+
+Gradle is executed through the included wrapper.
+
+```bash
+./gradlew build
+```
+
+Generate protobuf stubs after contract changes:
+
+```bash
+./gradlew :java:extraction-contract:generateProto
+```
+
+Run tests:
+
+```bash
+./gradlew test
+```
+
+Verify contract mirroring:
+
+```bash
+./gradlew verifyContractMirror
+```
+
+------
+
+# Testing
+
+The contract layer includes tests for:
+
+- request validation;
+- documented field boundaries;
+- error codes and retryability;
+- contract opacity;
+- service contract behavior;
+- contract mirror integrity.
+
+A key architectural test verifies that the compiled contract does not expose processor, library, worker, queue, or topology implementation details.
+
+Validation is intentionally implemented at the service boundary rather than relying on annotations that are not actually enforced by the build.
+
+------
+
+# Design Philosophy
+
+The Structured Content Extraction Plane follows a few simple principles:
+
+### Preserve evidence
+
+Raw content remains authoritative.
+
+### Preserve structure
+
+Do not throw away pages, layout, tables, speakers, timestamps, overlaps, scenes, images, or other observable relationships merely because a flattened representation is easier to consume.
+
+### Make enrichment explicit
+
+LLM/VLM-derived descriptions, summaries, and interpretations are derived artifacts with provenance.
+
+### Hide implementation
+
+Processors are replaceable. Deployment topology is replaceable. Hardware is replaceable. Internal routing is replaceable.
+
+The contract is the stable boundary.
+
+### Separate extraction from knowledge
+
+The extractor determines **what is present**.
+
+The Knowledge Platform determines **what it means**.
+
+------
+
+# References
+
+- Synanton v1.21 Structured Content Extraction Plane
+- Synanton v1.21 Structured Content Extraction Plane — Draft / Multimodal Design
+- [Synanton Platform](https://github.com/synanton/platform)
+- [Synanton Architecture](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.21.md)
+- [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf)
+
+------
+
+# License
 
 Apache 2.0 — see [LICENSE](LICENSE).
-
----
-
-## References
-
-- [Synanton v1.21 Structured Content Extraction Plane proposal](https://github.com/Synanton/platform/blob/main/docs/proposals/v1.21/Synanton_v1.21_Structured_content_extraction_plane.md) — the contract
-- [Multimodal extraction design draft](https://github.com/Synanton/platform/blob/main/docs/proposals/v1.21/Synanton_v1.21_Structured_content_extraction_plane_draft.md) — modality models and PDF PoC
-- [Implementation plan](https://github.com/Synanton/platform/blob/main/docs/implementation/content-extraction-plane/INDEX.md) — phased delivery
-- [Synanton GPU Runtime](https://github.com/Synanton/gpu-runtime) — the contract-bounded plane this repository is patterned after
-- [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf) — SCEP-3 PoC processor
+ 
