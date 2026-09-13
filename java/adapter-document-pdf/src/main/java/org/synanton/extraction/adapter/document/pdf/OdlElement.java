@@ -3,6 +3,8 @@ package org.synanton.extraction.adapter.document.pdf;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.JsonNode;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -19,7 +21,9 @@ import java.util.List;
  */
 @Data
 @NoArgsConstructor
+@AllArgsConstructor
 @JsonIgnoreProperties(ignoreUnknown = true)
+@Builder
 public class OdlElement {
 
     private String type;
@@ -68,6 +72,12 @@ public class OdlElement {
     @JsonAlias("column number")
     private int columnNumber;
 
+    @JsonAlias("row span")
+    private int rowSpan;
+
+    @JsonAlias("column span")
+    private int columnSpan;
+
     // textBlock / listItem / header / footer nest their own children under "kids", same as
     // the document root does.
     private List<OdlElement> kids;
@@ -87,4 +97,5 @@ public class OdlElement {
     // Only populated when hybrid/VLM image-description mode is enabled (Config.HYBRID_*);
     // base extraction (this adapter's default, Config.HYBRID_OFF) does not produce it.
     private String description;
+
 }

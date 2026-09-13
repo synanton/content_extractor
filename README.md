@@ -68,35 +68,37 @@ The Structured Content Extraction Plane preserves that structure and exposes it 
 The extraction plane sits between raw content storage and knowledge processing.
 
 ```text
-Source Systems
-(FileNet, SharePoint, local FS, ...)
-          │
-          ▼
-      Lucentrix
-   source retrieval
-          │
-          ▼
-   Content Objects
-      Object Storage
-          │
-          ▼
-┌──────────────────────────────┐
-│ Structured Content           │
-│ Extraction Plane             │
-│                              │
-│          BLACK BOX           │
-└──────────────┬───────────────┘
+      Source Systems
+    (FileNet, SharePoint, Box, Emails, Audio,
+       ImageServices, OpenText,
+        COLD, FS, ...)
                │
                ▼
-      StructuredPayload
+            Lucentrix
+        source retrieval
                │
-       ┌───────┴────────┐
-       ▼                ▼
- flattenedText     structured data
-       │                │
-       └────────┬───────┘
+               ▼
+         Content Objects
+         Object Storage
+               │
+               ▼
+ ┌──────────────────────────────┐
+ │     Structured Content       │
+ │      Extraction Plane        │
+ │                              │
+ │          BLACK BOX           │
+ └──────────────┬───────────────┘
+                │
                 ▼
-       Knowledge Processing
+        StructuredPayload
+                │
+        ┌───────┴────────┐
+        ▼                ▼
+  flattenedText     structured data
+        │                │
+        └────────┬───────┘
+                 ▼
+        Knowledge Processing
 ```
 
 The separation is intentional:
@@ -523,21 +525,21 @@ The rule is:
 Generated content should retain provenance and, where applicable, confidence and source references.
 
 ```text
-Raw Content
-     │
-     ▼
-Deterministic Extraction
-     │
-     ▼
-Structured Evidence
-     │
-     ├──► LLM/VLM enrichment
-     │         │
-     │         ▼
-     │    Derived Artifact
-     │
-     ▼
-Knowledge Processing
+    Raw Content
+        │
+        ▼
+    Deterministic Extraction
+        │
+        ▼
+   Structured Evidence
+        │
+        ├──► LLM/VLM enrichment
+        │         │
+        │         ▼
+        │    Derived Artifact
+        │
+        ▼
+   Knowledge Processing
 ```
 
 ------
@@ -592,22 +594,22 @@ A requested feature must never be considered successful merely because it was re
 The result explicitly reports what happened.
 
 ```text
-REQUESTED
+   REQUESTED
+       │
+       ▼
+   SUPPORTED?
+       │
+    ┌──┴───────────────┐
+    │                  │
+   yes                no
+    │                  │
+    ▼                  ▼
+   execution       UNSUPPORTED
     │
-    ▼
-SUPPORTED?
-    │
- ┌──┴───────────────┐
- │                  │
-yes                no
- │                  │
- ▼                  ▼
-execution       UNSUPPORTED
- │
- ├── APPLIED
- ├── PARTIAL
- ├── NOT_APPLICABLE
- └── FAILED
+    ├── APPLIED
+    ├── PARTIAL
+    ├── NOT_APPLICABLE
+    └── FAILED
 ```
 
 For example:
@@ -647,23 +649,23 @@ The extraction plane:
 A structured result can therefore be traced back to the source artifact and the representation that produced it.
 
 ```text
-Source Object
-     │
-     ├── contentRefId
-     ├── object reference
-     ├── media type
-     └── SHA-256
-           │
-           ▼
-     Extraction Operation
-           │
-           ▼
-     Structured Payload
-           │
-           ├── schema
-           ├── processor
-           ├── payload digest
-           └── extraction timestamp
+   Source Object
+        │
+        ├── contentRefId
+        ├── object reference
+        ├── media type
+        └── SHA-256
+              │
+              ▼
+        Extraction Operation
+              │
+              ▼
+        Structured Payload
+              │
+              ├── schema
+              ├── processor
+              ├── payload digest
+              └── extraction timestamp
 ```
 
 ------
@@ -685,12 +687,12 @@ Large content is referenced through object storage rather than transported throu
 Conceptually:
 
 ```text
-ObjectReference
- ├── bucket
- ├── key
- ├── version
- ├── sha256
- └── size
+   ObjectReference
+    ├── bucket
+    ├── key
+    ├── version
+    ├── sha256
+    └── size
 ```
 
 This keeps the API independent of content size and transport implementation.
@@ -741,19 +743,19 @@ Asynchronous extraction is a first-class contract.
 An extraction operation has an externally stable lifecycle:
 
 ```text
-ACCEPTED
-   │
-   ▼
-QUEUED
-   │
-   ▼
-RUNNING
-   │
-   ├──► COMPLETED
-   ├──► PARTIAL
-   ├──► FAILED
-   ├──► CANCELLED
-   └──► EXPIRED
+   ACCEPTED
+      │
+      ▼
+   QUEUED
+      │
+      ▼
+   RUNNING
+      │
+      ├──► COMPLETED
+      ├──► PARTIAL
+      ├──► FAILED
+      ├──► CANCELLED
+      └──► EXPIRED
 ```
 
 Progress is normalized:
@@ -861,18 +863,18 @@ The payload may represent:
 Conceptually:
 
 ```text
-StructuredPayload
- ├── descriptor
- │    ├── schemaId
- │    ├── schemaVersion
- │    ├── processorId
- │    ├── processorVersion
- │    ├── format
- │    ├── schemaDigest
- │    └── payloadDigest
- │
- └── content
-      └── modality-specific representation
+   StructuredPayload
+    ├── descriptor
+    │    ├── schemaId
+    │    ├── schemaVersion
+    │    ├── processorId
+    │    ├── processorVersion
+    │    ├── format
+    │    ├── schemaDigest
+    │    └── payloadDigest
+    │
+    └── content
+         └── modality-specific representation
 ```
 
 Processor version and schema version remain independent.
@@ -910,12 +912,12 @@ PDF
 or:
 
 ```text
-PDF
- │
- └──► detector
-       ├──► OCR extractor
-       ├──► PDF parser
-       └──► external extraction service
+   PDF
+    │
+    └──► detector
+          ├──► OCR extractor
+          ├──► PDF parser
+          └──► external extraction service
 ```
 
 Audio may be routed to transcription and diarization infrastructure.
@@ -931,21 +933,21 @@ These implementation details are deliberately hidden from the Synanton platform.
 The implementation is organized around three layers.
 
 ```text
-┌──────────────────────────────────────────────────────────┐
-│ Synanton Extraction Contract                            │
-│ Request / Operation / Result / Tags / Errors            │
-│ synanton.extraction.v1                                  │
-└─────────────────────────┬────────────────────────────────┘
-                          │
-┌─────────────────────────▼────────────────────────────────┐
-│ Modality Adapters                                        │
-│ PDF │ Text │ EPUB │ HTML │ Audio │ Image │ Video        │
-└─────────────────────────┬────────────────────────────────┘
-                          │
-┌─────────────────────────▼────────────────────────────────┐
-│ Processor Implementations                                │
-│ OpenDataLoader │ OCR │ ASR │ Diarization │ VLM │ ...    │
-└──────────────────────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────────┐
+   │ Synanton Extraction Contract                             │
+   │ Request / Operation / Result / Tags / Errors             │
+   │ synanton.extraction.v1                                   │
+   └─────────────────────────┬────────────────────────────────┘
+                             │
+   ┌─────────────────────────▼────────────────────────────────┐
+   │ Modality Adapters                                        │
+   │ PDF │ Text │ EPUB │ HTML │ Audio │ Image │ Video         │
+   └─────────────────────────┬────────────────────────────────┘
+                             │
+   ┌─────────────────────────▼────────────────────────────────┐
+   │ Processor Implementations                                │
+   │ OpenDataLoader │ OCR │ ASR │ Diarization │ VLM │ ...     │
+   └──────────────────────────────────────────────────────────┘
 ```
 
 The contract remains stable while modality adapters and processor implementations evolve independently.
@@ -993,13 +995,13 @@ There are no webhook dependencies in v1.21. Completion can be observed through o
 The protobuf contract is mirrored between this repository and the Synanton platform.
 
 ```text
-content_extractor
-    │
-    └── java/extraction-contract/src/main/proto/
+   content_extractor
+       │
+       └── java/extraction-contract/src/main/proto/
 
-platform
-    │
-    └── java/extraction-contract/src/main/proto/
+   platform
+       │
+       └── java/extraction-contract/src/main/proto/
 ```
 
 The copies must remain byte-identical.
