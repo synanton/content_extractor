@@ -50,6 +50,9 @@ dependencies {
     // Logging
     implementation(libs.logback.classic)
 
+    // Nullable
+    implementation(libs.jspecify)
+
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
 

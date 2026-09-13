@@ -74,8 +74,8 @@ class SubmitExtractionServiceTest {
     @Test
     void shouldQueueNewOperationWhenCapacityAvailable() {
         SubmitExtractionService service = new SubmitExtractionService(
-                operationRepository,
                 idempotencyStore,
+                operationRepository,
                 requestCanonicalizer,
                 properties(10),
                 () -> FIXED_NOW);
@@ -95,8 +95,8 @@ class SubmitExtractionServiceTest {
     @Test
     void shouldRejectWhenTenantCapacityIsSaturated() {
         SubmitExtractionService service = new SubmitExtractionService(
-                operationRepository,
                 idempotencyStore,
+                operationRepository,
                 requestCanonicalizer,
                 properties(1),
                 () -> FIXED_NOW);

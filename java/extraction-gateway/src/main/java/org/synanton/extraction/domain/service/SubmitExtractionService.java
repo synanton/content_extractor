@@ -31,16 +31,16 @@ public class SubmitExtractionService {
     private final Supplier<Instant> clock;
 
     public SubmitExtractionService(
-            OperationRepository operationRepository,
             IdempotencyStore idempotencyStore,
+            OperationRepository operationRepository,
             RequestCanonicalizer requestCanonicalizer,
             ExtractionGatewayProperties properties) {
-        this(operationRepository, idempotencyStore, requestCanonicalizer, properties, Instant::now);
+        this(idempotencyStore, operationRepository, requestCanonicalizer, properties, Instant::now);
     }
 
-    SubmitExtractionService(
-            OperationRepository operationRepository,
+    public SubmitExtractionService(
             IdempotencyStore idempotencyStore,
+            OperationRepository operationRepository,
             RequestCanonicalizer requestCanonicalizer,
             ExtractionGatewayProperties properties,
             Supplier<Instant> clock) {

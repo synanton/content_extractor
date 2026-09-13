@@ -3,6 +3,9 @@ package org.synanton.extraction.adapter.out.persistence;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.jspecify.annotations.Nullable;
+
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -259,7 +262,7 @@ public class JdbcOperationRepository implements OperationRepository {
 
     @Override
     public int countActiveOperations(String tenantId) {
-        Integer count = jdbcTemplate.queryForObject(
+        return jdbcTemplate.queryForObject(
                 """
                 SELECT COUNT(*)
                   FROM extraction_operations
@@ -269,7 +272,6 @@ public class JdbcOperationRepository implements OperationRepository {
                 Integer.class,
                 tenantId
         );
-        return count != null ? count : 0;
     }
 
     @Override
@@ -484,8 +486,8 @@ public class JdbcOperationRepository implements OperationRepository {
         };
     }
 
-    private static OffsetDateTime toOffset(Instant instant) {
-        return OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
+    private static OffsetDateTime toOffset(@Nullable Instant instant) {
+        return instant == null ? null : OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
     private static Timestamp toOffsetNullable(Instant instant) {

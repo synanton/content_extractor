@@ -5,6 +5,8 @@ plugins {
 allprojects {
     group = "com.synanton"
     version = "0.1.0-SNAPSHOT"
+    // Override Spring Boot's managed Testcontainers version (defaults to 1.19.8 in Boot 3.3.5)
+    extra["testcontainers.version"] = "1.21.4"
 }
 
 subprojects {

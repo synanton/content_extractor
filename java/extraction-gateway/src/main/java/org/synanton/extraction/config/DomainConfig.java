@@ -52,8 +52,8 @@ public class DomainConfig {
             RequestCanonicalizer requestCanonicalizer,
             ExtractionGatewayProperties properties) {
         return new SubmitExtractionService(
-                operationRepository,
                 idempotencyStore,
+                operationRepository,
                 requestCanonicalizer,
                 properties);
     }

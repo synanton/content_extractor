@@ -10,7 +10,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -52,6 +52,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -59,12 +61,6 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
-@Disabled("Requires Docker via Testcontainers. Verified against a Docker Engine reporting "
-        + "API 1.56: testcontainers 1.21.3's UnixSocketClientProviderStrategy connectivity "
-        + "probe sends a hardcoded old API version (1.32) that this daemon rejects "
-        + "(\"client version 1.32 is too old\") independent of DOCKER_API_VERSION; confirmed "
-        + "testcontainers 2.0.5 has the same probe behavior. Unrelated to this module's code "
-        + "-- run manually once a compatible Docker/testcontainers combination is available.")
 class AsyncExtractionIntegrationTest {
 
     @Container
@@ -122,10 +118,11 @@ class AsyncExtractionIntegrationTest {
                 new MicrometerExtractionMetrics(new SimpleMeterRegistry()));
 
         SubmitExtractionService submitExtractionService = new SubmitExtractionService(
-                operationRepository,
                 idempotencyStore,
+                operationRepository,
                 new RequestCanonicalizer(),
-                properties);
+                properties,
+                () -> Instant.now(Clock.systemUTC()));
         OperationAdmissionExecutor admissionExecutor = new OperationAdmissionExecutor(
                 submitExtractionService,
                 new TransactionTemplate(new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource)));
