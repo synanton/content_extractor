@@ -33,7 +33,7 @@ extraction-gateway:
 extraction:
   processors:
     opendataloader:
-      base-url: ${EXTRACTION_OPENDATALOADER_BASE_URL:}
+      enabled: ${EXTRACTION_OPENDATALOADER_ENABLED:true}
 
 management:
   endpoints:

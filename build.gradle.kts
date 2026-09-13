@@ -12,6 +12,13 @@ subprojects {
 
     repositories {
         mavenCentral()
+        // org.opendataloader:opendataloader-pdf-core (adapter-document-pdf) pulls in
+        // org.verapdf:validation-model / wcag-validation for PDF/UA accessibility checks,
+        // which are not published to Maven Central.
+        maven {
+            name = "vera-dev"
+            url = uri("https://artifactory.openpreservation.org/artifactory/vera-dev")
+        }
     }
 
     extensions.configure<JavaPluginExtension> {

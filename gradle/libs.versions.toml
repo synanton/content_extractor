@@ -21,6 +21,7 @@ protobufPlugin        = "0.9.4"
 javaxAnnotation       = "1.3.2"
 tika                  = "3.2.3"
 awsSdkV2              = "2.27.21"
+opendataloader        = "2.5.8"
 
 [libraries]
 # Spring Boot starters
@@ -54,6 +55,7 @@ micrometer-core       = { module = "io.micrometer:micrometer-core",             
 tika-core             = { module = "org.apache.tika:tika-core",                    version.ref = "tika" }
 tika-parsers          = { module = "org.apache.tika:tika-parsers-standard-package", version.ref = "tika" }
 aws-s3                = { module = "software.amazon.awssdk:s3",                    version.ref = "awsSdkV2" }
+opendataloader-pdf-core = { module = "org.opendataloader:opendataloader-pdf-core", version.ref = "opendataloader" }
 
 # Testing
 junit-bom           = { module = "org.junit:junit-bom",                         version.ref = "junit" }

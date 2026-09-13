@@ -8,23 +8,24 @@ import org.springframework.context.annotation.Configuration;
 /**
  * Spring configuration that wires the {@link PdfModalityAdapter}.
  *
- * <p>When {@code extraction.processors.opendataloader.base-url} is absent or blank,
- * the adapter is registered without an HTTP client and will return
+ * <p>PDF extraction runs the real OpenDataLoader library in-process — there is no
+ * external service to point at. {@code extraction.processors.opendataloader.enabled}
+ * (default {@code true}) is an operational escape hatch to disable the PDF modality
+ * without a redeploy; when disabled, the adapter returns
  * {@link synanton.extraction.spi.model.AdapterResult#unsupported(String)} for every request.
  */
 @Configuration
 public class PdfAdapterConfiguration {
 
-    @Value("${extraction.processors.opendataloader.base-url}")
-    private String openDataLoaderBaseUrl;
+    @Value("${extraction.processors.opendataloader.enabled:true}")
+    private boolean openDataLoaderEnabled;
 
     @Bean
     public PdfModalityAdapter pdfModalityAdapter() {
-        if (openDataLoaderBaseUrl == null || openDataLoaderBaseUrl.isBlank()) {
+        if (!openDataLoaderEnabled) {
             return new PdfModalityAdapter();
         }
-        ObjectMapper objectMapper = new ObjectMapper();
-        OpenDataLoaderClient client = new OpenDataLoaderClient(openDataLoaderBaseUrl, objectMapper);
+        OpenDataLoaderClient client = new OpenDataLoaderClient(new ObjectMapper());
         return new PdfModalityAdapter(client);
     }
 }

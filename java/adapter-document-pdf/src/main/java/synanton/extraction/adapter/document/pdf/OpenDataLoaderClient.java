@@ -1,80 +1,109 @@
 package synanton.extraction.adapter.document.pdf;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.opendataloader.pdf.api.Config;
+import org.opendataloader.pdf.api.OpenDataLoaderPDF;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.stream.Stream;
 
 /**
- * HTTP client for the OpenDataLoader PDF processing service.
+ * In-process client for {@code org.opendataloader:opendataloader-pdf-core}.
  *
- * <p>Posts PDF bytes to {@code {baseUrl}/convert} as multipart/form-data with field "file".
- * Returns the parsed JSON response.
+ * <p>The library is file-in/file-out: it reads a PDF from a path and writes its JSON
+ * (and, if configured, PDF/Markdown/HTML) output into a configured output folder — there
+ * is no in-memory return value and no HTTP service involved. This client writes the
+ * incoming bytes to a temp file, invokes {@link OpenDataLoaderPDF#processFile}, reads back
+ * the generated {@code <basename>.json} file, and cleans up both temp locations regardless
+ * of outcome.
  */
 public class OpenDataLoaderClient {
 
     private static final Logger log = LoggerFactory.getLogger(OpenDataLoaderClient.class);
 
-    private final String baseUrl;
     private final ObjectMapper objectMapper;
-    private final HttpClient httpClient;
 
-    public OpenDataLoaderClient(String baseUrl, ObjectMapper objectMapper) {
-        this.baseUrl = baseUrl;
+    public OpenDataLoaderClient(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
-        this.httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(30))
-                .build();
     }
 
     /**
-     * Sends a PDF to the OpenDataLoader service and returns the parsed response.
+     * Runs OpenDataLoader against the given PDF bytes and returns the parsed JSON response.
      *
      * @param pdfBytes the raw PDF bytes to process
-     * @return the parsed response from the service
-     * @throws OpenDataLoaderException if the HTTP call fails or the response cannot be parsed
+     * @return the parsed response
+     * @throws OpenDataLoaderException if the library fails or the output cannot be read/parsed
      */
     public OdlResponse extract(byte[] pdfBytes) {
-        String boundary = "----SynBoundary" + System.currentTimeMillis();
-        byte[] body = buildMultipartBody(boundary, pdfBytes);
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(baseUrl + "/convert"))
-                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
-                .timeout(Duration.ofSeconds(120))
-                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
-                .build();
-
+        Path inputFile = null;
+        Path outputDir = null;
         try {
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) {
-                throw new OpenDataLoaderException("OpenDataLoader returned HTTP " + response.statusCode());
-            }
-            return objectMapper.readValue(response.body(), OdlResponse.class);
-        } catch (OpenDataLoaderException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new OpenDataLoaderException("Failed to call OpenDataLoader: " + e.getMessage(), e);
+            inputFile = Files.createTempFile("odl-input-", ".pdf");
+            Files.write(inputFile, pdfBytes);
+            outputDir = Files.createTempDirectory("odl-output-");
+
+            Config config = new Config();
+            config.setOutputFolder(outputDir.toString());
+            config.setGenerateJSON(true);
+
+            OpenDataLoaderPDF.processFile(inputFile.toString(), config);
+
+            Path jsonFile = findGeneratedJson(outputDir, inputFile);
+            return objectMapper.readValue(jsonFile.toFile(), OdlResponse.class);
+        } catch (IOException e) {
+            throw new OpenDataLoaderException("Failed to run OpenDataLoader: " + e.getMessage(), e);
+        } finally {
+            deleteQuietly(inputFile);
+            deleteRecursivelyQuietly(outputDir);
         }
     }
 
-    private byte[] buildMultipartBody(String boundary, byte[] pdfBytes) {
-        String prefix = "--" + boundary + "\r\n"
-                + "Content-Disposition: form-data; name=\"file\"; filename=\"document.pdf\"\r\n"
-                + "Content-Type: application/pdf\r\n\r\n";
-        String suffix = "\r\n--" + boundary + "--\r\n";
-        byte[] prefixBytes = prefix.getBytes(StandardCharsets.UTF_8);
-        byte[] suffixBytes = suffix.getBytes(StandardCharsets.UTF_8);
-        byte[] result = new byte[prefixBytes.length + pdfBytes.length + suffixBytes.length];
-        System.arraycopy(prefixBytes, 0, result, 0, prefixBytes.length);
-        System.arraycopy(pdfBytes, 0, result, prefixBytes.length, pdfBytes.length);
-        System.arraycopy(suffixBytes, 0, result, prefixBytes.length + pdfBytes.length, suffixBytes.length);
-        return result;
+    private Path findGeneratedJson(Path outputDir, Path inputFile) throws IOException {
+        String expectedName = stripExtension(inputFile.getFileName().toString()) + ".json";
+        Path expected = outputDir.resolve(expectedName);
+        if (Files.exists(expected)) {
+            return expected;
+        }
+        // Fall back to "any .json OpenDataLoader wrote" in case its naming convention
+        // differs from a straight <basename>.json (defensive; the expected path above is
+        // what was observed empirically against the real library).
+        try (Stream<Path> files = Files.list(outputDir)) {
+            return files.filter(p -> p.toString().endsWith(".json"))
+                    .findFirst()
+                    .orElseThrow(() -> new OpenDataLoaderException(
+                            "OpenDataLoader did not produce a JSON output file in " + outputDir));
+        }
+    }
+
+    private static String stripExtension(String fileName) {
+        int dot = fileName.lastIndexOf('.');
+        return dot > 0 ? fileName.substring(0, dot) : fileName;
+    }
+
+    private static void deleteQuietly(Path path) {
+        if (path == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(path);
+        } catch (IOException e) {
+            log.warn("Failed to delete temp file {}: {}", path, e.getMessage());
+        }
+    }
+
+    private static void deleteRecursivelyQuietly(Path dir) {
+        if (dir == null || !Files.exists(dir)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(dir)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(OpenDataLoaderClient::deleteQuietly);
+        } catch (IOException e) {
+            log.warn("Failed to delete temp output dir {}: {}", dir, e.getMessage());
+        }
     }
 }

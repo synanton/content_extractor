@@ -1,5 +1,6 @@
 package synanton.extraction.adapter.out.objectstore;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -22,6 +23,7 @@ public class MinioSourceObjectReader implements SourceObjectReader {
 
     private final S3Client s3;
 
+    @Autowired
     public MinioSourceObjectReader(ExtractionGatewayProperties properties) {
         var store = properties.getObjectstore();
         this.s3 = S3Client.builder()

@@ -7,9 +7,10 @@ import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.flywaydb.core.Flyway;
-import org.junit.jupiter.api.Disabled;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -17,6 +18,8 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+import synanton.extraction.adapter.document.pdf.OpenDataLoaderClient;
+import synanton.extraction.adapter.document.pdf.PdfModalityAdapter;
 import synanton.extraction.adapter.document.text.TextModalityAdapter;
 import synanton.extraction.adapter.in.grpc.ExtractionGrpcAdapter;
 import synanton.extraction.adapter.out.metrics.MicrometerExtractionMetrics;
@@ -46,6 +49,8 @@ import synanton.extraction.v1.PriorityClass;
 import synanton.extraction.v1.SubmitExtractionRequest;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
@@ -54,11 +59,29 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @Testcontainers
-@Disabled("Requires Docker; run manually with Testcontainers")
+@Disabled("Requires Docker via Testcontainers. Verified against a Docker Engine reporting "
+        + "API 1.56: testcontainers 1.21.3's UnixSocketClientProviderStrategy connectivity "
+        + "probe sends a hardcoded old API version (1.32) that this daemon rejects "
+        + "(\"client version 1.32 is too old\") independent of DOCKER_API_VERSION; confirmed "
+        + "testcontainers 2.0.5 has the same probe behavior. Unrelated to this module's code "
+        + "-- run manually once a compatible Docker/testcontainers combination is available.")
 class AsyncExtractionIntegrationTest {
 
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+
+    // Any instance works — OpenDataLoaderPDF.shutdown() is a static, JVM-wide shutdown of
+    // the library's shared resources; extraction-gateway has no direct dependency on
+    // opendataloader-pdf-core itself (an implementation-only dependency of adapter-document-pdf),
+    // so this goes through PdfModalityAdapter's own public shutdown() rather than importing it.
+    private static PdfModalityAdapter pdfAdapterForShutdown;
+
+    @AfterAll
+    static void shutdownOpenDataLoader() {
+        if (pdfAdapterForShutdown != null) {
+            pdfAdapterForShutdown.shutdown();
+        }
+    }
 
     private Server server;
     private ManagedChannel channel;
@@ -90,8 +113,10 @@ class AsyncExtractionIntegrationTest {
         properties.getAsync().setMaxConcurrentOperationsPerTenant(5);
 
         objectStore = new InMemorySourceObjectReader();
+        PdfModalityAdapter pdfAdapter = new PdfModalityAdapter(new OpenDataLoaderClient(objectMapper));
+        pdfAdapterForShutdown = pdfAdapter;
         ExtractSyncService extractSyncService = new ExtractSyncService(
-                new ExtractionRouter(List.of(new TextModalityAdapter())),
+                new ExtractionRouter(List.of(new TextModalityAdapter(), pdfAdapter)),
                 objectStore,
                 properties,
                 new MicrometerExtractionMetrics(new SimpleMeterRegistry()));
@@ -181,5 +206,51 @@ class AsyncExtractionIntegrationTest {
                 .setOperationId(submitted.getOperationId())
                 .build());
         assertThat(result.getFlattenedText()).contains("Async extraction body");
+    }
+
+    @Test
+    void shouldSubmitProcessAndFetchAsyncResultForPdf() throws Exception {
+        byte[] body = Files.readAllBytes(Path.of("src/test/resources/fixtures/quarterly-report.pdf"));
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+        objectStore.put("tenant-content", "docs/quarterly-report.pdf", body);
+
+        SubmitExtractionRequest request = SubmitExtractionRequest.newBuilder()
+                .setTenantId("tenant-a")
+                .setIdempotencyKey("async-pdf-job-1")
+                .setPriorityClass(PriorityClass.PRIORITY_NORMAL)
+                .setItem(ExtractionRequestItem.newBuilder()
+                        .setContentRefId("content-async-pdf-1")
+                        .setMediaType("application/pdf")
+                        .setSource(ObjectReference.newBuilder()
+                                .setBucket("tenant-content")
+                                .setKey("docs/quarterly-report.pdf")
+                                .setSha256(sha)
+                                .setSizeBytes(body.length))
+                        .build())
+                .build();
+
+        ExtractionOperation submitted = client.submitExtraction(request);
+        assertThat(submitted.getStatus()).isEqualTo(ExtractionStatus.STATUS_QUEUED);
+
+        ExtractionStatus terminalStatus = ExtractionStatus.STATUS_UNSPECIFIED;
+        for (int attempt = 0; attempt < 100; attempt++) {
+            ExtractionOperation polled = client.getOperations(GetOperationsRequest.newBuilder()
+                    .setTenantId("tenant-a")
+                    .addOperationIds(submitted.getOperationId())
+                    .build()).getOperations(0);
+            terminalStatus = polled.getStatus();
+            if (terminalStatus == ExtractionStatus.STATUS_COMPLETED) {
+                break;
+            }
+            Thread.sleep(100);
+        }
+
+        assertThat(terminalStatus).isEqualTo(ExtractionStatus.STATUS_COMPLETED);
+
+        ExtractionResult result = client.getResult(GetResultRequest.newBuilder()
+                .setTenantId("tenant-a")
+                .setOperationId(submitted.getOperationId())
+                .build());
+        assertThat(result.getFlattenedText()).contains("Quarterly Report");
     }
 }

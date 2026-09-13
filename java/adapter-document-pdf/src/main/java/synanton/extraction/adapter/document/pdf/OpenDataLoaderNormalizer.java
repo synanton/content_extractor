@@ -13,19 +13,25 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Converts an {@link OdlResponse} from the OpenDataLoader PDF service into a
+ * Converts an {@link OdlResponse} from the real OpenDataLoader library output into a
  * {@link NormalizedDocument} using the Synanton domain model.
  *
- * <p>The mapping is:
+ * <p>The mapping (verified against the real library's output for heading/paragraph;
+ * table/list/header/footer/text-block mapped per the upstream {@code schema.json} shape,
+ * which our test fixture does not independently exercise — see class notes on
+ * {@link OdlElement}):
  * <ul>
- *   <li>OpenDataLoader {@code heading} &rarr; {@link ElementType#HEADING}</li>
- *   <li>OpenDataLoader {@code paragraph} &rarr; {@link ElementType#PARAGRAPH}</li>
- *   <li>OpenDataLoader {@code table} &rarr; {@link ElementType#TABLE}</li>
- *   <li>OpenDataLoader {@code picture} / {@code image} &rarr; {@link ElementType#IMAGE}</li>
- *   <li>OpenDataLoader {@code formula} &rarr; {@link ElementType#FORMULA}</li>
- *   <li>OpenDataLoader {@code list} &rarr; {@link ElementType#LIST}</li>
- *   <li>OpenDataLoader {@code caption} &rarr; {@link ElementType#CAPTION}</li>
+ *   <li>{@code heading} &rarr; {@link ElementType#HEADING}</li>
+ *   <li>{@code paragraph}, {@code text block} &rarr; {@link ElementType#PARAGRAPH}</li>
+ *   <li>{@code table} &rarr; {@link ElementType#TABLE} (rows/cells flattened to text)</li>
+ *   <li>{@code image} &rarr; {@link ElementType#IMAGE}</li>
+ *   <li>{@code list} &rarr; {@link ElementType#LIST} (list items flattened to text)</li>
+ *   <li>{@code caption} &rarr; {@link ElementType#CAPTION}</li>
+ *   <li>{@code header}, {@code footer} &rarr; {@link ElementType#PARAGRAPH}</li>
  * </ul>
+ * {@code table row} and {@code table cell} are not top-level document elements in the real
+ * schema (they nest under {@code table}), so they are handled inside {@link #mapTable} rather
+ * than in the top-level switch.
  */
 public class OpenDataLoaderNormalizer {
 
@@ -89,33 +95,32 @@ public class OpenDataLoaderNormalizer {
                     kid.getHeadingLevel() > 0 ? kid.getHeadingLevel() : 1,
                     List.of(), Map.of(), null);
 
-            case "paragraph", "text" -> new NormalizedElement(
+            case "paragraph", "text block" -> new NormalizedElement(
                     elementId, ElementType.PARAGRAPH, bounds,
-                    extractText(kid.getContent()), origin,
+                    textOrNestedKids(kid), origin,
                     0, List.of(), Map.of(), null);
 
             case "table" -> mapTable(kid, elementId, bounds, origin);
 
-            case "picture", "image", "figure" -> new NormalizedElement(
+            case "image" -> new NormalizedElement(
                     elementId, ElementType.IMAGE, bounds,
                     null, origin,
                     0, List.of(), Map.of(),
                     kid.getDescription());
 
-            case "formula", "equation" -> new NormalizedElement(
-                    elementId, ElementType.FORMULA, bounds,
-                    null, origin,
-                    0, List.of(), Map.of(),
-                    extractText(kid.getContent()));
-
             case "list" -> new NormalizedElement(
                     elementId, ElementType.LIST, bounds,
-                    extractText(kid.getContent()), origin,
+                    mapListText(kid), origin,
                     0, List.of(), Map.of(), null);
 
             case "caption" -> new NormalizedElement(
                     elementId, ElementType.CAPTION, bounds,
                     extractText(kid.getContent()), origin,
+                    0, List.of(), Map.of(), null);
+
+            case "header", "footer" -> new NormalizedElement(
+                    elementId, ElementType.PARAGRAPH, bounds,
+                    textOrNestedKids(kid), origin,
                     0, List.of(), Map.of(), null);
 
             default -> {
@@ -129,31 +134,66 @@ public class OpenDataLoaderNormalizer {
         };
     }
 
+    /**
+     * {@code text block}/{@code header}/{@code footer} elements nest their content under
+     * {@code kids} (schema.json) rather than carrying it directly in {@code content}.
+     */
+    private String textOrNestedKids(OdlElement kid) {
+        String direct = extractText(kid.getContent());
+        if (direct != null && !direct.isBlank()) {
+            return direct;
+        }
+        if (kid.getKids() == null || kid.getKids().isEmpty()) {
+            return direct;
+        }
+        return joinNonBlank(kid.getKids().stream().map(child -> extractText(child.getContent())).toList());
+    }
+
+    /**
+     * Table content nests as {@code table -> rows: [tableRow] -> cells: [tableCell]}
+     * (schema.json), not as a {@code content} object — flattened here to pipe-delimited
+     * rows since the domain model represents a table element as text, not a grid.
+     */
     private NormalizedElement mapTable(OdlElement kid, String elementId, ElementBounds bounds,
-                                       ContentOrigin origin) {
-        JsonNode contentNode = kid.getContent();
-        if (contentNode == null || contentNode.isNull()) {
+                                        ContentOrigin origin) {
+        List<OdlElement> rows = kid.getRows();
+        if (rows == null || rows.isEmpty()) {
             return new NormalizedElement(elementId, ElementType.TABLE, bounds, null,
                     ContentOrigin.EMBEDDED_TEXT, 0, List.of(), Map.of(), null);
         }
 
-        StringBuilder tableText = new StringBuilder();
-        if (contentNode.has("headers")) {
-            List<String> headers = new ArrayList<>();
-            contentNode.get("headers").forEach(h -> headers.add(h.asText()));
-            tableText.append(String.join(" | ", headers));
-        }
-        if (contentNode.has("rows")) {
-            contentNode.get("rows").forEach(row -> {
-                List<String> cells = new ArrayList<>();
-                row.forEach(cell -> cells.add(cell.asText()));
-                tableText.append("\n").append(String.join(" | ", cells));
-            });
+        List<String> rowLines = new ArrayList<>();
+        for (OdlElement row : rows) {
+            List<OdlElement> cells = row.getCells();
+            if (cells == null) {
+                continue;
+            }
+            List<String> cellTexts = cells.stream().map(cell -> extractText(cell.getContent())).toList();
+            rowLines.add(String.join(" | ", cellTexts));
         }
 
         return new NormalizedElement(elementId, ElementType.TABLE, bounds,
-                tableText.toString().trim(), origin,
+                String.join("\n", rowLines), origin,
                 0, List.of(), Map.of(), null);
+    }
+
+    /**
+     * List content nests as {@code list -> list items: [listItem]} (schema.json), each
+     * item's text under its own {@code kids}.
+     */
+    private String mapListText(OdlElement kid) {
+        List<OdlElement> items = kid.getListItems();
+        if (items == null || items.isEmpty()) {
+            return extractText(kid.getContent());
+        }
+        return joinNonBlank(items.stream().map(this::textOrNestedKids).toList());
+    }
+
+    private static String joinNonBlank(List<String> parts) {
+        return parts.stream()
+                .filter(t -> t != null && !t.isBlank())
+                .reduce((a, b) -> a + "\n" + b)
+                .orElse(null);
     }
 
     private ElementBounds mapBounds(OdlElement kid) {

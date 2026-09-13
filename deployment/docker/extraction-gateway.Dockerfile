@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jdk-alpine AS build
+FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 COPY gradle ./gradle
 COPY gradlew build.gradle.kts settings.gradle.kts gradle.properties* ./

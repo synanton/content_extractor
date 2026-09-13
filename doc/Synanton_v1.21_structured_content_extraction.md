@@ -3,7 +3,7 @@
 **Document ID:** SNTP-6-PROP-1.21-SCEP-REV1  
 **Date:** 2026-08-24  
 **Status:** PROPOSED — ARCHITECTURAL DESIGN IN PROGRESS  
-**Amends:** Part IX (§65–§79) of `docs/architecture/synanton-design-1.21.md`  
+**Amends:** Part IX (§65–§79) of `docs/architecture/synanton-design-1.21.md` (at the time of writing; that document is now archived at `docs/architecture/archive/synanton-design-1.21.md` in the platform repo and folded into `synanton-design-1.22.md` Part IX — see the platform repo's [`synanton-platform-architecture-1.0.md`](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md) for the current design hierarchy)  
 **Scope:** Structured content extraction architecture and external contract
 
 ---

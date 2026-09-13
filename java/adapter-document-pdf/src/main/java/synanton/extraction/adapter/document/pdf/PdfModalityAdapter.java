@@ -1,5 +1,7 @@
 package synanton.extraction.adapter.document.pdf;
 
+import jakarta.annotation.PreDestroy;
+import org.opendataloader.pdf.api.OpenDataLoaderPDF;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import synanton.extraction.spi.model.AdapterResult;
@@ -16,9 +18,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Modality adapter for {@code application/pdf} backed by the OpenDataLoader HTTP service.
+ * Modality adapter for {@code application/pdf} backed by the real
+ * {@code org.opendataloader:opendataloader-pdf-core} library, called in-process.
  *
- * <p>When the OpenDataLoader service URL is not configured, this adapter returns
+ * <p>When PDF processing is disabled by configuration, this adapter returns
  * {@link AdapterResult#unsupported(String)} so the gateway can report the feature as
  * unsupported rather than fail with an obscure error.
  */
@@ -49,6 +52,19 @@ public class PdfModalityAdapter implements ModalityAdapter {
     @Override
     public String processorId() {
         return "opendataloader-pdf";
+    }
+
+    /**
+     * Releases OpenDataLoader's shared resources once, at adapter shutdown — not per
+     * request. Per the library's own usage pattern, {@code processFile} is called
+     * repeatedly and {@code shutdown} only once, at the end of the calling application's
+     * lifecycle.
+     */
+    @PreDestroy
+    public void shutdown() {
+        if (client != null) {
+            OpenDataLoaderPDF.shutdown();
+        }
     }
 
     @Override
@@ -112,9 +128,7 @@ public class PdfModalityAdapter implements ModalityAdapter {
         }
 
         boolean hasImages = response.getKids() != null && response.getKids().stream()
-                .anyMatch(k -> k.getType() != null
-                        && (k.getType().equalsIgnoreCase("picture")
-                            || k.getType().equalsIgnoreCase("image")));
+                .anyMatch(k -> "image".equalsIgnoreCase(k.getType()));
         states.put("embeddedImages", Boolean.TRUE.equals(options.embeddedImages())
                 ? (hasImages ? FeatureOutcome.APPLIED : FeatureOutcome.NOT_APPLICABLE)
                 : FeatureOutcome.NOT_REQUESTED);
