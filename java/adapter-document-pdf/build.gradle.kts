@@ -1,7 +1,8 @@
-// adapter-document-pdf: OpenDataLoader-backed PDF adapter (SCEP-3).
+// adapter-document-pdf: OpenDataLoader-backed PDF adapter (SCEP-3/SCEP-6).
 //
-// Calls an OpenDataLoader HTTP service; normalizes its JSON output into NormalizedDocument.
-// The OpenDataLoader service URL is configurable; the adapter returns UNSUPPORTED when not set.
+// Calls the real org.opendataloader:opendataloader-pdf-core library in-process
+// (file-in/file-out via OpenDataLoaderPDF.processFile); normalizes its JSON
+// output into NormalizedDocument.
 
 plugins {
     java
@@ -10,6 +11,7 @@ plugins {
 dependencies {
     implementation(project(":java:extraction-spi"))
 
+    implementation(libs.opendataloader.pdf.core)
     implementation(libs.jackson.databind)
     implementation(libs.slf4j.api)
 

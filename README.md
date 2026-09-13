@@ -1143,10 +1143,17 @@ The Knowledge Platform determines **what it means**.
 
 # References
 
-- Synanton v1.21 Structured Content Extraction Plane
-- Synanton v1.21 Structured Content Extraction Plane - Draft / Multimodal Design
+- [Synanton v1.21 Structured Content Extraction Plane](doc/Synanton_v1.21_structured_content_extraction.md)
+- [Synanton v1.21 Structured Content Extraction Plane - Draft / Multimodal Design](doc/Synanton_v1.21_multimodal_extraction_model.md)
+- [Test Kubernetes Cluster (PoC hardware)](doc/k8s-test-hardware.md)
 - [Synanton Platform](https://github.com/synanton/platform)
-- [Synanton Architecture](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.21.md)
+- [Synanton Platform Architecture 1.0 (capstone)](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md) - integrates Designs 1.22–1.34; current entry point for the platform architecture
+- [Design 1.21 - Structured Content Extraction Plane](https://github.com/synanton/platform/blob/main/docs/architecture/archive/synanton-design-1.21.md) - archived; folded into Design 1.22 Part IX as the historical baseline
+- [Design 1.22 - Platform base architecture](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.22.md)
+- [Design 1.26 - Content Cache Plane](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.26.md) - owns storage/retrieval/lifecycle of the `StructuredPayload`/`flattenedText` this plane emits, downstream of extraction
+- [Design 1.27 - Eventing and Workflow Plane](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.27.md) - the platform's common async/event/retry contract; this plane's own Operation lifecycle (SubmitExtraction/GetOperations) predates it and is not yet reconciled with it (tracked under SCEP-5)
+- [Design 1.32 - Platform API & Contract Architecture](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.32.md) - owns the public `Operation` resource semantics that this plane's async model should eventually align with
+- [Design 1.33 - Kubernetes Operator Readiness](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.33.md) - canonical `content-extractor-operator` naming for a future Kubernetes lifecycle, not required for the PoC deployment in [`doc/k8s-test-hardware.md`](doc/k8s-test-hardware.md)
 - [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf)
 
 ------
