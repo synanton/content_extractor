@@ -11,7 +11,7 @@ The Synanton Content Extractor implements the **Structured Content Extraction Pl
 
 It answers one fundamental question:
 
-> **What is present in this artifact, and what structure can be reliably extracted from it?**
+> **What is present in this artifact and what structure can be reliably extracted from it?**
 
 The extraction plane is deliberately separated from knowledge processing. It extracts and structures observable content; downstream Synanton components determine what that content means in a business domain.
 
@@ -21,10 +21,10 @@ The extraction plane is deliberately separated from knowledge processing. It ext
 
 Enterprise content arrives in many forms:
 
-- Documents — PDF, TXT, EPUB, HTML
-- Audio — recordings, meetings, conversations
-- Images — scans, screenshots, photographs, diagrams
-- Video — recordings, presentations, demonstrations, short clips
+- Documents - PDF, TXT, EPUB, HTML
+- Audio - recordings, meetings, conversations
+- Images - scans, screenshots, photographs, diagrams
+- Video - recordings, presentations, demonstrations, short clips
 
 Each modality contains structure that can be lost when content is reduced to plain text.
 
@@ -122,24 +122,24 @@ The extraction contract is the architectural boundary.
 The implementation may be:
 
 ```text
-Mode A — Embedded
+Mode A - Embedded
 
 Synanton
    │
    └──► extractor
-Mode B — Co-located
+Mode B - Co-located
 
 Synanton
    │
    └──► extraction component
-Mode C — Clustered
+Mode C - Clustered
 
 Synanton
    │
    └──► extraction API
             │
             └──► workers
-Mode D — Distributed / delegated
+Mode D - Distributed / delegated
 
 Synanton
    │
@@ -373,14 +373,14 @@ A conversation can be represented as:
         "speakerId": "speaker-1",
         "startMs": 10200,
         "endMs": 13800,
-        "text": "The important part is—"
+        "text": "The important part is-"
       },
       {
         "id": "u022",
         "speakerId": "speaker-2",
         "startMs": 12900,
         "endMs": 15200,
-        "text": "Yes, but the contract—"
+        "text": "Yes, but the contract-"
       }
     ],
     "relationships": [
@@ -1025,24 +1025,24 @@ Never modify one copy independently.
 
 The following rules are non-negotiable:
 
-1. **Contract over topology** — embedded, co-located, clustered, and distributed deployments expose the same contract.
-2. **Black-box extraction** — the contract does not depend on processor or topology names.
-3. **Raw source authority** — extraction never modifies the source artifact.
-4. **Structure before meaning** — observable structure is preserved before semantic interpretation.
-5. **Structured payload extensibility** — modality-specific representations do not require expanding a universal document model.
-6. **Domain isolation** — extraction does not become knowledge processing.
-7. **Idempotency** — asynchronous submission is safely retryable.
-8. **Expiration** — asynchronous operations have explicit expiration semantics.
-9. **Capacity awareness** — the plane can reject or defer work when safe admission is impossible.
-10. **External priority** — priority expresses intent without exposing scheduling topology.
-11. **Explicit feature state** — requested, applied, partial, unsupported, failed, and not-applicable states remain distinguishable.
-12. **Opaque business metadata** — business tags are carried through without being interpreted as extraction semantics.
-13. **Async first-class** — asynchronous extraction is not a secondary implementation path.
-14. **Batch operations** — multiple content references can belong to one operation.
-15. **No webhook dependency** — v1.21 does not require callbacks for completion.
-16. **No topology leakage** — queues, workers, hardware, and routing remain implementation details.
-17. **Provenance** — structured and generated artifacts retain traceability to source evidence.
-18. **Extraction is not knowledge processing** — ontology, entity resolution, ranking, business semantics, and knowledge graphs remain downstream concerns.
+1. **Contract over topology** - embedded, co-located, clustered, and distributed deployments expose the same contract.
+2. **Black-box extraction** - the contract does not depend on processor or topology names.
+3. **Raw source authority** - extraction never modifies the source artifact.
+4. **Structure before meaning** - observable structure is preserved before semantic interpretation.
+5. **Structured payload extensibility** - modality-specific representations do not require expanding a universal document model.
+6. **Domain isolation** - extraction does not become knowledge processing.
+7. **Idempotency** - asynchronous submission is safely retryable.
+8. **Expiration** - asynchronous operations have explicit expiration semantics.
+9. **Capacity awareness** - the plane can reject or defer work when safe admission is impossible.
+10. **External priority** - priority expresses intent without exposing scheduling topology.
+11. **Explicit feature state** - requested, applied, partial, unsupported, failed, and not-applicable states remain distinguishable.
+12. **Opaque business metadata** - business tags are carried through without being interpreted as extraction semantics.
+13. **Async first-class** - asynchronous extraction is not a secondary implementation path.
+14. **Batch operations** - multiple content references can belong to one operation.
+15. **No webhook dependency** - v1.21 does not require callbacks for completion.
+16. **No topology leakage** - queues, workers, hardware, and routing remain implementation details.
+17. **Provenance** - structured and generated artifacts retain traceability to source evidence.
+18. **Extraction is not knowledge processing** - ontology, entity resolution, ranking, business semantics, and knowledge graphs remain downstream concerns.
 
 ------
 
@@ -1144,7 +1144,7 @@ The Knowledge Platform determines **what it means**.
 # References
 
 - Synanton v1.21 Structured Content Extraction Plane
-- Synanton v1.21 Structured Content Extraction Plane — Draft / Multimodal Design
+- Synanton v1.21 Structured Content Extraction Plane - Draft / Multimodal Design
 - [Synanton Platform](https://github.com/synanton/platform)
 - [Synanton Architecture](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.21.md)
 - [OpenDataLoader PDF](https://github.com/opendataloader-project/opendataloader-pdf)
@@ -1153,5 +1153,5 @@ The Knowledge Platform determines **what it means**.
 
 # License
 
-Apache 2.0 — see [LICENSE](LICENSE).
+Apache 2.0 - see [LICENSE](LICENSE).
  
