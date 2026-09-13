@@ -151,30 +151,150 @@ public class OpenDataLoaderNormalizer {
 
     /**
      * Table content nests as {@code table -> rows: [tableRow] -> cells: [tableCell]}
-     * (schema.json), not as a {@code content} object — flattened here to pipe-delimited
-     * rows since the domain model represents a table element as text, not a grid.
+     * (schema.json). Cells may span multiple rows or columns; the JSON declares this
+     * via {@code row span} / {@code column span} on the originating cell, and the
+     * covered positions simply do not appear as cells in the subsequent rows.
+     *
+     * <p>To flatten correctly, we first materialize a rectangular grid: for every
+     * cell we place its text at {@code (row, col)} and replicate it across its span
+     * down/right. Covered positions are then filled from that map. Finally each grid
+     * row is joined with {@code " | "}.
+     *
+     * <p>The domain model represents a table element as text, not a grid, so this
+     * expansion is the only way to preserve column alignment in the flattened output.
      */
     private NormalizedElement mapTable(OdlElement kid, String elementId, ElementBounds bounds,
-                                        ContentOrigin origin) {
+                                       ContentOrigin origin) {
         List<OdlElement> rows = kid.getRows();
         if (rows == null || rows.isEmpty()) {
             return new NormalizedElement(elementId, ElementType.TABLE, bounds, null,
                     ContentOrigin.EMBEDDED_TEXT, 0, List.of(), Map.of(), null);
         }
 
-        List<String> rowLines = new ArrayList<>();
+        // First pass: determine grid dimensions (max columns across all rows, accounting
+        // for column spans). Row count is just rows.size(), but row spans may extend it.
+        int rowCount = rows.size();
+        int colCount = 0;
+        for (OdlElement row : rows) {
+            int width = 0;
+            List<OdlElement> cells = row.getCells();
+            if (cells != null) {
+                for (OdlElement cell : cells) {
+                    width += Math.max(1, cell.getColumnSpan());
+                }
+            }
+            colCount = Math.max(colCount, width);
+        }
+        // Also account for row spans that extend past the declared row list.
         for (OdlElement row : rows) {
             List<OdlElement> cells = row.getCells();
-            if (cells == null) {
-                continue;
+            if (cells == null) continue;
+            for (OdlElement cell : cells) {
+                rowCount = Math.max(rowCount, row.getRowNumber() + cell.getRowSpan() - 1);
             }
-            List<String> cellTexts = cells.stream().map(cell -> extractText(cell.getContent())).toList();
+        }
+
+        // Second pass: place each cell's text at its origin and replicate across spans.
+        // Use 1-based row/column numbers from the JSON as grid coordinates.
+        String[][] grid = new String[rowCount + 1][colCount + 1];
+        for (OdlElement row : rows) {
+            int rowNum = row.getRowNumber() > 0 ? row.getRowNumber() : 1;
+            List<OdlElement> cells = row.getCells();
+            if (cells == null) continue;
+
+            int col = 1;
+            for (OdlElement cell : cells) {
+                // Skip columns already occupied by a span from a previous row/cell.
+                while (col <= colCount && grid[rowNum][col] != null) {
+                    col++;
+                }
+                if (col > colCount) break;
+
+                int rowSpan = Math.max(1, cell.getRowSpan());
+                int colSpan = Math.max(1, cell.getColumnSpan());
+                String text = extractCellText(cell);
+
+                for (int r = 0; r < rowSpan && rowNum + r <= rowCount; r++) {
+                    for (int c = 0; c < colSpan && col + c <= colCount; c++) {
+                        grid[rowNum + r][col + c] = text;
+                    }
+                }
+                col += colSpan;
+            }
+        }
+
+        // Third pass: emit each grid row, using "" for cells that remain unfilled
+        // (genuinely absent cells, as in the blank first column of the last row).
+        List<String> rowLines = new ArrayList<>();
+        for (int r = 1; r <= rowCount; r++) {
+            List<String> cellTexts = new ArrayList<>(colCount);
+            for (int c = 1; c <= colCount; c++) {
+                cellTexts.add(grid[r][c] != null ? grid[r][c] : "");
+            }
             rowLines.add(String.join(" | ", cellTexts));
         }
 
         return new NormalizedElement(elementId, ElementType.TABLE, bounds,
                 String.join("\n", rowLines), origin,
                 0, List.of(), Map.of(), null);
+    }
+
+    /**
+     * Extracts the display text for a single table cell.
+     *
+     * <p>A cell may carry text in one of three ways:
+     * <ol>
+     *   <li>directly in its own {@code content} (rare in real output, but possible),</li>
+     *   <li>in the {@code content} of a child inside {@code kids} (the common case —
+     *       typically a single {@code paragraph}), or</li>
+     *   <li>in deeper nested descendants under {@code kids}.</li>
+     * </ol>
+     * Genuinely empty cells yield an empty string so the surrounding pipe-delimited
+     * row keeps its column positions.
+     */
+    private String extractCellText(OdlElement cell) {
+        if (cell == null) {
+            return "";
+        }
+
+        String direct = extractText(cell.getContent());
+        if (direct != null && !direct.isBlank()) {
+            return direct;
+        }
+
+        List<OdlElement> kids = cell.getKids();
+        if (kids == null || kids.isEmpty()) {
+            return "";
+        }
+
+        List<String> parts = new ArrayList<>();
+        for (OdlElement child : kids) {
+            collectText(child, parts);
+        }
+        String joined = joinNonBlank(parts);
+        return joined != null ? joined : "";
+    }
+
+    /**
+     * Recursively collects non-blank text from an element, preferring its own
+     * {@code content} and descending into {@code kids} when necessary.
+     */
+    private void collectText(OdlElement element, List<String> out) {
+        if (element == null) {
+            return;
+        }
+
+        String direct = extractText(element.getContent());
+        if (direct != null && !direct.isBlank()) {
+            out.add(direct);
+        }
+
+        List<OdlElement> kids = element.getKids();
+        if (kids != null) {
+            for (OdlElement child : kids) {
+                collectText(child, out);
+            }
+        }
     }
 
     /**

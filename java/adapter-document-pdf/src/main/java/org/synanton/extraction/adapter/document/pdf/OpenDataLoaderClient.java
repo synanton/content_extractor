@@ -63,6 +63,26 @@ public class OpenDataLoaderClient {
         }
     }
 
+    public OdlResponse extract(Path inputFile) {
+        Path outputDir = null;
+        try {
+            outputDir = Files.createTempDirectory("odl-output-");
+
+            Config config = new Config();
+            config.setOutputFolder(outputDir.toString());
+            config.setGenerateJSON(true);
+
+            OpenDataLoaderPDF.processFile(inputFile.toString(), config);
+
+            Path jsonFile = findGeneratedJson(outputDir, inputFile);
+            return objectMapper.readValue(jsonFile.toFile(), OdlResponse.class);
+        } catch (IOException e) {
+            throw new OpenDataLoaderException("Failed to run OpenDataLoader: " + e.getMessage(), e);
+        } finally {
+            deleteRecursivelyQuietly(outputDir);
+        }
+    }
+
     private Path findGeneratedJson(Path outputDir, Path inputFile) throws IOException {
         String expectedName = stripExtension(inputFile.getFileName().toString()) + ".json";
         Path expected = outputDir.resolve(expectedName);
