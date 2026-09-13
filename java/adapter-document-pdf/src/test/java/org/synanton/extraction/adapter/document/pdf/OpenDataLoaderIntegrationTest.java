@@ -3,8 +3,6 @@ package org.synanton.extraction.adapter.document.pdf;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.synanton.extraction.adapter.document.pdf.pdf.*;
-import org.synanton.extraction.adapter.document.pdf.OpenDataLoaderNormalizerTest;
 import org.synanton.extraction.spi.model.AdapterResult;
 import org.synanton.extraction.spi.model.ElementType;
 import org.synanton.extraction.spi.model.ExtractionOptions;

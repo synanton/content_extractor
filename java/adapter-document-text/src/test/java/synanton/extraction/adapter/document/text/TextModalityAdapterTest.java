@@ -1,11 +1,12 @@
 package synanton.extraction.adapter.document.text;
 
 import org.junit.jupiter.api.Test;
-import org.synanton.extraction.spi.spi.model.AdapterResult;
-import org.synanton.extraction.spi.spi.model.ExtractionOptions;
-import org.synanton.extraction.spi.spi.model.ExtractionRequest;
-import org.synanton.extraction.spi.spi.model.FeatureOutcome;
-import org.synanton.extraction.spi.spi.model.ObjectRef;
+import org.synanton.extraction.adapter.document.text.TextModalityAdapter;
+import org.synanton.extraction.spi.model.AdapterResult;
+import org.synanton.extraction.spi.model.ExtractionOptions;
+import org.synanton.extraction.spi.model.ExtractionRequest;
+import org.synanton.extraction.spi.model.FeatureOutcome;
+import org.synanton.extraction.spi.model.ObjectRef;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;

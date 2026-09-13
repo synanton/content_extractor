@@ -345,7 +345,7 @@ class ExtractionServiceContractTest {
                     .setFlattenedText(flattened)
                     .putFeatureStates("text", FeatureState.FEATURE_APPLIED)
                     .putFeatureStates("ocr", FeatureState.FEATURE_NOT_APPLICABLE)
-                    .setProvenance(synanton.extraction.v1.ResultProvenance.newBuilder()
+                    .setProvenance(org.synanton.extraction.v1.ResultProvenance.newBuilder()
                             .setContentRefId(original.getItem().getContentRefId())
                             .setSourceSha256(original.getItem().getSource().getSha256())
                             .setSource(original.getItem().getSource()))

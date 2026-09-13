@@ -2,10 +2,6 @@ package org.synanton.extraction.adapter.document.pdf;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
-import org.synanton.extraction.adapter.document.pdf.pdf.OdlElement;
-import org.synanton.extraction.adapter.document.pdf.pdf.OdlResponse;
-import org.synanton.extraction.adapter.document.pdf.pdf.OpenDataLoaderNormalizer;
-import org.synanton.extraction.adapter.document.pdf.pdf.PdfModalityAdapter;
 import org.synanton.extraction.spi.model.ContentOrigin;
 import org.synanton.extraction.spi.model.ElementBounds;
 import org.synanton.extraction.spi.model.ElementType;

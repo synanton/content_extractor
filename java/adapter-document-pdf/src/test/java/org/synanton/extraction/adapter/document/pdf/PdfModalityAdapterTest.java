@@ -1,7 +1,6 @@
 package org.synanton.extraction.adapter.document.pdf;
 
 import org.junit.jupiter.api.Test;
-import org.synanton.extraction.adapter.document.pdf.pdf.PdfModalityAdapter;
 import org.synanton.extraction.spi.model.AdapterResult;
 import org.synanton.extraction.spi.model.ExtractionOptions;
 import org.synanton.extraction.spi.model.ExtractionRequest;
