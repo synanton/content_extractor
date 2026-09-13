@@ -2,13 +2,14 @@ package synanton.extraction.adapter.document.text;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.synanton.extraction.spi.spi.port.ModalityAdapter;
 
 /**
  * Spring {@link Configuration} that registers the {@link TextModalityAdapter} as a bean.
  *
  * <p>The gateway's component scan picks up this class under the {@code synanton.extraction}
  * base package and makes the adapter available as a
- * {@link synanton.extraction.spi.port.ModalityAdapter} bean.
+ * {@link ModalityAdapter} bean.
  */
 @Configuration
 public class TextAdapterConfiguration {
