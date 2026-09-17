@@ -1,6 +1,6 @@
 # Synanton Content Extractor
 
-[![Status](https://img.shields.io/badge/Status-SCEP--3%20Contract-blue)](https://github.com/Synanton/content_extractor)
+[![Status](https://img.shields.io/badge/Status-SCEP--5%20Integration-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
 [![gRPC](https://img.shields.io/badge/gRPC-Protobuf-purple)](https://grpc.io/)
@@ -271,51 +271,56 @@ Optional features include:
 
 ## PDF Extraction PoC
 
-The first concrete processor integration is the **OpenDataLoader PDF** path.
+The first concrete processor integration is the **OpenDataLoader PDF** path, backed by the
+real `org.opendataloader:opendataloader-pdf-core` Java library (Maven Central), called
+in-process - not an HTTP service. The library is file-in/file-out: it reads a PDF from a
+path and writes JSON (and, if configured, PDF/Markdown/HTML) to a configured output folder;
+`adapter-document-pdf`'s `OpenDataLoaderClient` handles the temp-file lifecycle around that.
 
-The PoC uses OpenDataLoader to investigate normalized extraction of PDF elements such as:
+The real element `type` values (verified against the library's own `schema.json`) are:
 
 ```text
 heading
 paragraph
-table
-picture
-formula
 caption
-...
+table
+table row
+table cell
+text block
+list
+list item
+image
+header
+footer
 ```
 
-A representative processor output can contain:
+A representative real output element (verified against the library's actual JSON, not
+hand-written):
 
 ```json
 {
-  "type": "paragraph",
-  "id": 2,
-  "pageNumber": 1,
-  "boundingBox": [72.0, 640.0, 540.0, 690.0],
-  "content": "The extraction plane converts raw enterprise content into structured representations."
+  "type": "heading",
+  "id": 1,
+  "level": "Doctitle",
+  "page number": 1,
+  "bounding box": [72.0, 715.44, 230.92, 739.24],
+  "heading level": 1,
+  "font": "Helvetica-Bold",
+  "font size": 20.0,
+  "text color": "[0.0]",
+  "content": "Quarterly Report"
 }
 ```
 
-Tables can preserve their semantic structure:
+Tables nest as `table` → `rows: [tableRow]` → `cells: [tableCell]` rather than a flat
+`{headers, rows}` object; `adapter-document-pdf`'s normalizer walks that nested shape.
 
-```json
-{
-  "type": "table",
-  "id": 18,
-  "pageNumber": 2,
-  "content": {
-    "headers": ["Feature", "Purpose"],
-    "rows": [
-      ["OCR", "Extract text from scanned pages"],
-      ["Layout", "Preserve document reading order"],
-      ["Tables", "Preserve tabular structure"]
-    ]
-  }
-}
-```
-
-Images and formulas can remain explicit extraction elements rather than being discarded during text conversion.
+Note: earlier drafts of this section (and of `adapter-document-pdf`'s own code) assumed
+`picture`/`formula` element types and camelCase field names (`pageNumber`, `boundingBox`) -
+neither is accurate. `picture`-with-`description` output only appears when the library's
+optional hybrid/VLM image-description mode is enabled (`Config.HYBRID_*`, off by default);
+base extraction uses `image` with `source`/`data`/`format`, and field names use spaces
+(`"page number"`, not `"pageNumber"`), per the real `schema.json`.
 
 The processor-specific representation is normalized into a Synanton document payload.
 
@@ -961,11 +966,11 @@ Current and planned modules:
 | Module                       | Status        | Purpose                                                |
 | ---------------------------- | ------------- | ------------------------------------------------------ |
 | `java/extraction-contract`   | **Active**    | Protobuf contract, request validation, error catalogue |
-| `java/extraction-gateway`    | Planned       | gRPC server, operation store, router, admission        |
-| `java/extraction-spi`        | Planned       | `ModalityAdapter` SPI and normalized payload model     |
-| `java/adapter-document-text` | Planned       | TXT, EPUB, HTML extraction                             |
-| `java/adapter-document-pdf`  | Planned / PoC | OpenDataLoader-backed PDF extraction                   |
-| `java/adapter-stubs`         | Planned       | Audio/image/video capability stubs                     |
+| `java/extraction-gateway`    | **Active**    | gRPC server, Postgres-backed operation store, router, admission, async worker |
+| `java/extraction-spi`        | **Active**    | `ModalityAdapter` SPI and normalized payload model     |
+| `java/adapter-document-text` | **Active**    | TXT, EPUB, HTML extraction                             |
+| `java/adapter-document-pdf`  | **Active**    | Real `opendataloader-pdf-core`-backed PDF extraction   |
+| `java/adapter-stubs`         | **Active**    | Audio/image/video capability stubs (declare `UNSUPPORTED`, not real processing) |
 
 ------
 
@@ -1052,15 +1057,15 @@ The following rules are non-negotiable:
 
 The repository is implementing the Structured Content Extraction Plane incrementally.
 
-| Phase      | Name                                         | Status       |
-| ---------- | -------------------------------------------- | ------------ |
-| **SCEP-1** | Extraction contract                          | ✅ Complete  |
-| **SCEP-2** | Extraction plane skeleton + synchronous path | ✅ Complete  |
-| **SCEP-3** | PDF extraction PoC with OpenDataLoader       | ✅ Complete  |
-| **SCEP-4** | Asynchronous operation model                 | Planned      |
-| **SCEP-5** | Synanton platform integration                | Planned      |
-| **SCEP-6** | Topology equivalence + hardening             | Planned      |
-| **SCEP-7** | Multimodal expansion: audio, image, video    | Post-v1.21   |
+| Phase      | Name                                         | Status                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SCEP-1** | Extraction contract                          | ✅ Complete                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **SCEP-2** | Extraction plane skeleton + synchronous path | ✅ Complete                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **SCEP-3** | PDF extraction PoC with OpenDataLoader       | ✅ Complete <br/> now backed by the real `org.opendataloader:opendataloader-pdf-core` library                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **SCEP-4** | Asynchronous operation model                 | ✅ Complete <br/> gRPC gateway, Postgres-backed operation store, lease-based worker, idempotency, capacity/cancel/estimate; verified via `AsyncExtractionIntegrationTest`<br/> (Testcontainers - currently `@Disabled` on environments where the local Docker Engine's API version trips a `testcontainers`/`docker-java` connectivity-probe bug; passes the PDF path added alongside the pre-existing text path once Docker is compatible)                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **SCEP-5** | Synanton platform integration                | Contract-ready - `synanton.extraction.v1` and the `ObjectReference{bucket,key,version,sha256,size}` shape are the real integration surface (deliberately matches the platform's Synvault object model). The platform-side consumer (`java/extraction-client`'s `ExtractionPlaneClient`, with `ExtractionFallbackPolicy` and reconcile-after-timeout on submit) is implemented and tested in the sibling `platform` repo, not here. `scripts/verify-contract-mirror.sh` enforces byte-identical `.proto`s on both sides and currently passes. Open: this plane's async Operation lifecycle (`SubmitExtraction`/`GetOperations`) is not yet reconciled with the platform's common eventing/workflow contract (Design 1.27) or its public `Operation` resource (Design 1.32) - both are themselves "Approved, not started" in the platform's own architecture, so this is correctly sequenced, not overdue. |
+| **SCEP-6** | Topology equivalence + hardening             | In progress                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| **SCEP-7** | Multimodal expansion: audio, image, video    | Post-v1.21                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 The architecture is intentionally being established before committing the platform to a particular extraction implementation.
 
