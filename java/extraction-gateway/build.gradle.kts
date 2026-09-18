@@ -86,7 +86,7 @@ tasks.named<Test>("test") {
 
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
     archiveBaseName.set("extraction-gateway")
-    mainClass.set("synanton.extraction.ExtractionGatewayApplication")
+    mainClass.set("org.synanton.extraction.ExtractionGatewayApplication")
     // adapter-document-pdf's opendataloader-pdf-core dependency pulls in both
     // org.glassfish.jaxb:jaxb-core and com.sun.xml.bind:jaxb-core (both resolving to
     // 4.0.5) via unrelated transitive paths (Apache POI vs. legacy javax.xml.bind) -
