@@ -23,3 +23,6 @@ build/
 **/generated/
 
 .claude/**/*.json
+
+# scripts/docker-smoke-test.sh's throwaway Python venv + generated gRPC stubs
+.smoke-test-venv/

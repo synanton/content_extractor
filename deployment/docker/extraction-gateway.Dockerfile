@@ -1,10 +1,12 @@
+# syntax=docker/dockerfile:1
 FROM eclipse-temurin:21-jdk AS build
 WORKDIR /workspace
 COPY gradle ./gradle
 COPY gradlew build.gradle.kts settings.gradle.kts gradle.properties* ./
 COPY gradle/libs.versions.toml ./gradle/libs.versions.toml
 COPY java ./java
-RUN ./gradlew :java:extraction-gateway:bootJar -x test --no-daemon
+RUN --mount=type=cache,target=/root/.gradle \
+    ./gradlew :java:extraction-gateway:bootJar -x test --no-daemon
 
 FROM eclipse-temurin:21-jre-alpine
 RUN apk add --no-cache wget \

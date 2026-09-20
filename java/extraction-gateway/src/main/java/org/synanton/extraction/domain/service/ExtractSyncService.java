@@ -1,5 +1,7 @@
 package org.synanton.extraction.domain.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.synanton.extraction.config.ExtractionGatewayProperties;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome.OutcomeStatus;
@@ -37,6 +39,7 @@ import java.util.concurrent.TimeoutException;
  */
 public class ExtractSyncService {
 
+    private static final Logger log = LoggerFactory.getLogger(ExtractSyncService.class);
     private static final ThreadMXBean THREAD_MX = ManagementFactory.getThreadMXBean();
 
     private final ExtractionRouter router;
@@ -239,6 +242,13 @@ public class ExtractSyncService {
             metrics.recordFailed(mediaType, "ERROR_EXPIRED");
         } else if (failure != null) {
             metrics.recordFailed(mediaType, failure.errorCode());
+        }
+        if (failure != null) {
+            log.warn("Sync extraction failed: contentRefId={} mediaType={} status={} errorCode={} diagnostic={}",
+                    contentRefId, mediaType, status, failure.errorCode(), failure.diagnostic());
+        } else {
+            log.warn("Sync extraction failed: contentRefId={} mediaType={} status={}",
+                    contentRefId, mediaType, status);
         }
         long wallMs = (System.nanoTime() - startedAtNanos) / 1_000_000L;
         long cpuNs = currentCpuNanos() - cpuStartNanos;

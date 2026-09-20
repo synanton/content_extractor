@@ -17,6 +17,8 @@ import org.synanton.extraction.spi.port.SourceObjectReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
@@ -117,6 +119,43 @@ class ExtractSyncServiceTest {
         assertThat(outcome.failure().errorCode()).isEqualTo("ERROR_UNSUPPORTED_MEDIA_TYPE");
         assertThat(store.contentLengthCalls.get()).isZero();
         assertThat(store.readCalls.get()).isZero();
+    }
+
+    /**
+     * Regression test for a runtime-only classpath bug: Spring Boot's dependency-management
+     * BOM force-downgraded commons-lang3 to 3.14.0 in this module (the only one the BOM
+     * applies to), below the 3.18.0 Tika's parser modules actually request. That version
+     * lacks {@code commons-lang3}'s {@code SystemProperties.getUserName(String)} overload,
+     * which something in Tika's {@code AutoDetectParser} call chain invokes for realistic
+     * multi-paragraph text - throwing a {@code NoSuchMethodError} that, being an {@code Error}
+     * rather than an {@code Exception}, is not caught by {@code TextModalityAdapter}'s own
+     * catch block and surfaced instead as a silent {@code ERROR_EXTRACTION_FAILED} here.
+     * A trivial single-line fixture (as in {@link #shouldExtractPlainTextSync()}) does not
+     * exercise the failing code path - this uses a real multi-paragraph demo document that did.
+     */
+    @Test
+    void shouldExtractRealisticMultiParagraphTextWithoutClasspathError() throws Exception {
+        byte[] body = Files.readAllBytes(Path.of("src/test/resources/fixtures/supply-chain-overview.txt"));
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+
+        InMemorySourceObjectReader store = new InMemorySourceObjectReader();
+        store.put("synanton-hot", "demo/supply-chain-overview", body);
+
+        ExtractionGatewayProperties props = new ExtractionGatewayProperties();
+        ExtractSyncService service = new ExtractSyncService(
+                new ExtractionRouter(List.of(new TextModalityAdapter())),
+                store,
+                props);
+
+        ObjectRef ref = new ObjectRef("synanton-hot", "demo/supply-chain-overview", "", sha, body.length);
+        SyncExtractionOutcome outcome = service.extract(
+                "demo", "key-1", "ref-1", ref, "text/plain", ExtractionOptions.defaults(), null);
+
+        assertThat(outcome.status()).isEqualTo(SyncExtractionOutcome.OutcomeStatus.COMPLETED);
+        assertThat(outcome.document().flattenedText())
+                .contains("Supply Chain Management: Principles and Risk Overview")
+                .contains("Acme Corp")
+                .contains("Globex Manufacturing");
     }
 
     @Test
