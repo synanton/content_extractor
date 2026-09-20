@@ -7,6 +7,12 @@ allprojects {
     version = "0.1.0-SNAPSHOT"
     // Override Spring Boot's managed Testcontainers version (defaults to 1.19.8 in Boot 3.3.5)
     extra["testcontainers.version"] = "1.21.4"
+    // Override Spring Boot's managed commons-lang3 version (pinned to 3.14.0 in Boot 3.3.5's
+    // BOM), which force-downgrades the 3.18.0 that Tika 3.2.3's parser modules, commons-compress
+    // and POI actually request. 3.14.0 lacks SystemProperties.getUserName(String), used
+    // somewhere in Tika's AutoDetectParser call chain - resolving to it causes a runtime
+    // NoSuchMethodError in extraction-gateway (the only module the Spring BOM applies to).
+    extra["commons-lang3.version"] = "3.18.0"
 }
 
 subprojects {

@@ -47,6 +47,28 @@ jobs:
     # - name: Build with Gradle 8.9
     #   run: gradle build
 
+  docker-smoke-test:
+
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    # Builds deployment/docker/extraction-gateway.Dockerfile and makes a real ExtractSync
+    # call against it. `./gradlew build` above only compiles/tests/assembles the jar - it
+    # never runs it, so a runtime-only classpath bug (a dependency-management BOM silently
+    # downgrading a transitive library, for example) can pass that job and still break the
+    # actual image. This job exists to catch exactly that class of bug.
+    - name: Docker build + real extraction smoke test
+      run: ./scripts/docker-smoke-test.sh
+
   dependency-submission:
 
     runs-on: ubuntu-latest
