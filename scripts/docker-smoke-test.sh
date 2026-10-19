@@ -60,14 +60,13 @@ for i in $(seq 1 30); do
   sleep 3
 done
 
-echo "[3/5] Uploading fixtures to MinIO..."
-docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" cp "$TEXT_FIXTURE" minio:/tmp/supply-chain-overview.txt
-docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" cp "$PDF_FIXTURE" minio:/tmp/quarterly-report.pdf
-docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" exec -T minio sh -c "
-  mc alias set local http://localhost:9000 minioadmin minioadmin >/dev/null &&
-  mc cp /tmp/supply-chain-overview.txt local/$BUCKET/supply-chain-overview.txt >/dev/null &&
-  mc cp /tmp/quarterly-report.pdf local/$BUCKET/quarterly-report.pdf >/dev/null
-"
+echo "[3/5] Uploading fixtures to the object store..."
+# The Chainguard client image has no shell and takes endpoint+credentials from
+# MC_HOST_local (set on the service); the repo is mounted at /repo.
+REPO_ROOT="$REPO_ROOT" docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" run --rm minio-fixtures \
+  cp /repo/java/extraction-gateway/src/test/resources/fixtures/supply-chain-overview.txt "local/$BUCKET/supply-chain-overview.txt"
+REPO_ROOT="$REPO_ROOT" docker compose -p "$COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" run --rm minio-fixtures \
+  cp /repo/java/adapter-document-pdf/src/test/resources/fixtures/quarterly-report.pdf "local/$BUCKET/quarterly-report.pdf"
 echo "[4/5] Setting up Python gRPC probe environment..."
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
