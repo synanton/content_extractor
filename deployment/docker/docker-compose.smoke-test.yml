@@ -16,27 +16,55 @@ services:
       timeout: 3s
       retries: 10
 
+  # MinIO withdrew its community images (docker.io/quay) on 2025-10-23;
+  # Chainguard's free rebuilds are the maintained drop-in (SLSA L3, no
+  # account): https://www.chainguard.dev/unchained/secure-and-free-minio-chainguard-containers
+  #
+  # PINNED BY DIGEST (the tag below rebuilds daily — a pin is what makes the
+  # build reproducible; the digest is for the amd64 manifest):
+  #   chainguard/minio:latest
+  # To move the pin deliberately:
+  #   docker pull chainguard/minio:latest
+  #   docker inspect --format '{{index .RepoDigests 0}}' chainguard/minio:latest
   minio:
-    image: minio/minio:latest
+    image: chainguard/minio@sha256:709099319add48dfb44aa596a7070d3ddd8dd04d7ae881765719aec29df9e510
     command: server /data
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
+    # The image bundles mc with the built-in `local` alias (verified).
     healthcheck:
       test: ["CMD-SHELL", "mc ready local"]
       interval: 3s
       timeout: 3s
       retries: 10
 
+  # The Chainguard images have no shell: the client runs mc directly and takes
+  # the endpoint+credentials from MC_HOST_<alias> (no `mc alias set` step).
   minio-init:
-    image: minio/mc:latest
+    # Pinned like the server: chainguard/minio-client:latest
+    image: chainguard/minio-client@sha256:3d0109d854f045c0158637d6ad0d44fd8a3aef9f0b62082096eb1854c2df8b31
     depends_on:
       minio:
         condition: service_healthy
-    entrypoint: >
-      sh -c "mc alias set local http://minio:9000 minioadmin minioadmin &&
-             mc mb --ignore-existing local/smoke-test"
+    environment:
+      MC_HOST_local: http://minioadmin:minioadmin@minio:9000
+    command: ["mb", "--ignore-existing", "local/smoke-test"]
     restart: "no"
+
+  # Fixture uploads run through this one-shot client (profile-gated: `up`
+  # does not start it). `docker compose run --rm minio-fixtures cp ...`.
+  minio-fixtures:
+    # Pinned like the server: chainguard/minio-client:latest
+    image: chainguard/minio-client@sha256:3d0109d854f045c0158637d6ad0d44fd8a3aef9f0b62082096eb1854c2df8b31
+    profiles: ["fixtures"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MC_HOST_local: http://minioadmin:minioadmin@minio:9000
+    volumes:
+      - ${REPO_ROOT:-../..}:/repo:ro
 
   extraction-gateway:
     build:
