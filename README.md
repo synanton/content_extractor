@@ -1,5 +1,12 @@
 # Synanton Content Extractor
 
+> **Current capability status (2026-10-21):** PDF and text-like document
+> adapters are implemented; audio, image, and video adapters are capability
+> stubs that report unsupported, not multimodal extraction implementations.
+> The Phase 1 BM25 ingestion-to-UI-search path was accepted on 2026-10-21; that
+> validates the demonstrated path, not every format, option, async lifecycle,
+> or topology. Start at the [documentation index](doc/README.md).
+
 [![Status](https://img.shields.io/badge/Status-SCEP--5%20Integration-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
@@ -34,6 +41,18 @@ The extraction plane is deliberately separated from knowledge processing. It ext
 ------
 
 ## Overview
+
+### Implemented media types and limits of the claim
+
+The gateway currently advertises PDF (`application/pdf`) through the
+OpenDataLoader-backed PDF adapter and text-like formats (`text/plain`,
+`text/markdown`, `text/x-markdown`, `text/html`, `text/csv`, XHTML, and EPUB)
+through the Tika-backed adapter. Text-like results are primarily paragraph
+elements; they do not promise Markdown heading parsing, layout analysis, OCR,
+or table extraction. Audio, image, and video adapter modules are stubs that
+return unsupported results. Other capabilities are reported feature-by-feature
+and may be unsupported or partial. See module code/tests and the dated
+integration evidence before describing a format or feature as validated.
 
 Enterprise content arrives in many forms:
 
@@ -1079,7 +1098,7 @@ The repository is implementing the Structured Content Extraction Plane increment
 | **SCEP-2** | Extraction plane skeleton + synchronous path | ✅ Complete                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | **SCEP-3** | PDF extraction PoC with OpenDataLoader       | ✅ Complete <br/> now backed by the real `org.opendataloader:opendataloader-pdf-core` library                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **SCEP-4** | Asynchronous operation model                 | ✅ Complete <br/> gRPC gateway, Postgres-backed operation store, lease-based worker, idempotency, capacity/cancel/estimate; verified via `AsyncExtractionIntegrationTest` (Testcontainers - runs and passes cleanly, including the PDF path alongside the pre-existing text path)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| **SCEP-5** | Synanton platform integration                | Contract-ready - `synanton.extraction.v1` and the `ObjectReference{bucket,key,version,sha256,size}` shape are the real integration surface (deliberately matches the platform's Synvault object model). The platform-side consumer (`java/extraction-client`'s `ExtractionPlaneClient`, with `ExtractionFallbackPolicy` and reconcile-after-timeout on submit) is implemented and tested in the sibling `platform` repo, not here. `scripts/verify-contract-mirror.sh` enforces byte-identical `.proto`s on both sides and currently passes. Open: this plane's async Operation lifecycle (`SubmitExtraction`/`GetOperations`) is not yet reconciled with the platform's common eventing/workflow contract (Design 1.27) or its public `Operation` resource (Design 1.32) - both are themselves "Approved, not started" in the platform's own architecture, so this is correctly sequenced, not overdue. |
+| **SCEP-5** | Synanton platform integration                | Contract mirror and platform extraction client are implemented and tested; Phase 1 BM25 ingestion-to-UI-search was accepted 2026-10-21. This validates that demonstrated path only. The extractor's async operation model is not yet reconciled with the platform's common eventing/workflow contract (Design 1.27; contract freeze pending #247) or public `Operation` resource (Design 1.32; contracts frozen, generation-A implementation in progress). |
 | **SCEP-6** | Topology equivalence + hardening             | In progress                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | **SCEP-7** | Multimodal expansion: audio, image, video    | Post-v1.21                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
@@ -1165,6 +1184,12 @@ The Knowledge Platform determines **what it means**.
 ------
 
 # References
+
+For current contract authority and implementation status, use the
+[Platform Architecture 1.0 capstone](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md),
+[Design 1.22 Part IX](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.22.md),
+and this repository's [documentation index](doc/README.md). The v1.21 design
+documents below are retained proposal/history, not current platform authority.
 
 - [Synanton v1.21 Structured Content Extraction Plane](doc/Synanton_v1.21_structured_content_extraction.md)
 - [Synanton v1.21 Structured Content Extraction Plane - Draft / Multimodal Design](doc/Synanton_v1.21_multimodal_extraction_model.md)
