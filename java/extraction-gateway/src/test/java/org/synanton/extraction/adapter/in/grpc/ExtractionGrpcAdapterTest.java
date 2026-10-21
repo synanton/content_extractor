@@ -18,7 +18,10 @@ import org.synanton.extraction.domain.service.CancelOperationService;
 import org.synanton.extraction.domain.service.CapacityService;
 import org.synanton.extraction.domain.service.ExtractSyncService;
 import org.synanton.extraction.domain.service.ExtractionRouter;
+import org.synanton.extraction.domain.service.OperationPersistence;
 import org.synanton.extraction.domain.service.OperationQueryService;
+import org.synanton.extraction.domain.service.RequestCanonicalizer;
+import org.synanton.extraction.spi.port.IdempotencyStore;
 import org.synanton.extraction.spi.port.OperationRepository;
 import org.synanton.extraction.spi.port.ResultStore;
 import org.synanton.extraction.v1.DocumentPayload;
@@ -29,6 +32,10 @@ import org.synanton.extraction.v1.ObjectReference;
 import org.synanton.extraction.v1.PriorityClass;
 import org.synanton.extraction.v1.SubmitExtractionRequest;
 import org.synanton.extraction.v1.ExtractionRequestItem;
+
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -59,6 +66,17 @@ class ExtractionGrpcAdapterTest {
     @Mock
     private ResultStore resultStore;
 
+    @Mock
+    private OperationPersistence operationPersistence;
+
+    @Mock
+    private IdempotencyStore idempotencyStore;
+
+    @Mock
+    private RequestCanonicalizer requestCanonicalizer;
+
+    private TransactionTemplate transactionTemplate;
+
     private Server server;
     private ManagedChannel channel;
     private ExtractionServiceGrpc.ExtractionServiceBlockingStub client;
@@ -67,6 +85,8 @@ class ExtractionGrpcAdapterTest {
     @BeforeEach
     void start() throws Exception {
         store = new InMemorySourceObjectReader();
+        transactionTemplate = new TransactionTemplate(new DataSourceTransactionManager(
+                new DriverManagerDataSource("jdbc:h2:mem:adapter-test;DB_CLOSE_DELAY=-1", "sa", "")));
         ExtractSyncService service = new ExtractSyncService(
                 new ExtractionRouter(List.of(new TextModalityAdapter())),
                 store,
@@ -79,6 +99,10 @@ class ExtractionGrpcAdapterTest {
                 capacityService,
                 operationRepository,
                 resultStore,
+                operationPersistence,
+                idempotencyStore,
+                requestCanonicalizer,
+                transactionTemplate,
                 new ExtractionGatewayProperties());
         String name = InProcessServerBuilder.generateName();
         server = InProcessServerBuilder.forName(name).directExecutor().addService(adapter).build().start();

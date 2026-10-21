@@ -137,8 +137,8 @@ public class JdbcOperationRepository implements OperationRepository {
                     INSERT INTO extraction_operation_items (
                         operation_id, item_index, content_ref_id, media_type,
                         source_bucket, source_key, source_version, source_sha256, source_size,
-                        status, progress, feature_states
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb))
+                        status, progress, feature_states, error_code, error_diagnostic
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)
                     """,
                     operation.id(),
                     item.itemIndex(),
@@ -151,7 +151,9 @@ public class JdbcOperationRepository implements OperationRepository {
                     source.sizeBytes(),
                     item.state().name(),
                     progressForItem(item),
-                    toJson(item.featureStates())
+                    toJson(item.featureStates()),
+                    item.errorCode(),
+                    item.errorDiagnostic()
             );
         }
     }

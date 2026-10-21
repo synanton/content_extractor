@@ -9,6 +9,7 @@ import org.synanton.extraction.config.ExtractionGatewayProperties;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome.OutcomeStatus;
 import org.synanton.extraction.domain.service.ExtractSyncService;
+import org.synanton.extraction.domain.service.OperationPersistence;
 import org.synanton.extraction.spi.model.ExtractionOptions;
 import org.synanton.extraction.spi.model.NormalizedDocument;
 import org.synanton.extraction.spi.model.ObjectRef;
@@ -17,7 +18,6 @@ import org.synanton.extraction.spi.port.OperationRepository;
 import org.synanton.extraction.spi.port.OperationRepository.ExtractionOperation;
 import org.synanton.extraction.spi.port.OperationRepository.ItemRecord;
 import org.synanton.extraction.spi.port.OperationRepository.ItemSource;
-import org.synanton.extraction.spi.port.ResultStore;
 
 import java.time.Instant;
 import java.util.List;
@@ -40,7 +40,7 @@ class ExtractionWorkerTest {
     private ExtractSyncService extractSyncService;
 
     @Mock
-    private ResultStore resultStore;
+    private OperationPersistence operationPersistence;
 
     private ExtractionWorker worker;
 
@@ -51,7 +51,7 @@ class ExtractionWorkerTest {
         worker = new ExtractionWorker(
                 operationRepository,
                 extractSyncService,
-                resultStore,
+                operationPersistence,
                 properties);
     }
 
@@ -102,6 +102,6 @@ class ExtractionWorkerTest {
 
         verify(operationRepository).transitionState("op-1", OperationState.RUNNING, OperationState.COMPLETED);
         verify(operationRepository).assignCompletionSequence("op-1");
-        verify(resultStore).store(eq("tenant-a"), eq("op-1"), eq(0), any());
+        verify(operationPersistence).storeResult(eq("tenant-a"), eq("op-1"), eq(0), any());
     }
 }

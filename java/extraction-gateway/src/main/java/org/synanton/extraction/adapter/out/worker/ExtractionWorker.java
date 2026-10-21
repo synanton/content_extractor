@@ -3,11 +3,11 @@ package org.synanton.extraction.adapter.out.worker;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import org.synanton.extraction.spi.port.ResultStore;
 import org.synanton.extraction.config.ExtractionGatewayProperties;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome.OutcomeStatus;
 import org.synanton.extraction.domain.service.ExtractSyncService;
+import org.synanton.extraction.domain.service.OperationPersistence;
 import org.synanton.extraction.spi.model.AdapterResult;
 import org.synanton.extraction.spi.model.ExtractionFailure;
 import org.synanton.extraction.spi.model.ExtractionOptions;
@@ -38,7 +38,7 @@ public class ExtractionWorker {
 
     private final OperationRepository operationRepository;
     private final ExtractSyncService extractSyncService;
-    private final ResultStore resultStore;
+    private final OperationPersistence operationPersistence;
     private final ExtractionGatewayProperties properties;
     private final ScheduledExecutorService scheduler;
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -46,11 +46,11 @@ public class ExtractionWorker {
     public ExtractionWorker(
             OperationRepository operationRepository,
             ExtractSyncService extractSyncService,
-            ResultStore resultStore,
+            OperationPersistence operationPersistence,
             ExtractionGatewayProperties properties) {
         this.operationRepository = operationRepository;
         this.extractSyncService = extractSyncService;
-        this.resultStore = resultStore;
+        this.operationPersistence = operationPersistence;
         this.properties = properties;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread thread = new Thread(r, "extraction-worker");
@@ -162,7 +162,7 @@ public class ExtractionWorker {
                 : AdapterResult.failed(
                         failure != null ? failure : ExtractionFailure.internalError("Unknown failure"),
                         outcome.featureStates());
-        resultStore.store(
+        operationPersistence.storeResult(
                 operation.tenantId(),
                 operation.id(),
                 item.itemIndex(),
