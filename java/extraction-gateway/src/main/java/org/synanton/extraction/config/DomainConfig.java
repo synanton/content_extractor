@@ -8,12 +8,14 @@ import org.synanton.extraction.domain.service.CancelOperationService;
 import org.synanton.extraction.domain.service.CapacityService;
 import org.synanton.extraction.domain.service.ExtractSyncService;
 import org.synanton.extraction.domain.service.ExtractionRouter;
+import org.synanton.extraction.domain.service.OperationPersistence;
 import org.synanton.extraction.domain.service.OperationQueryService;
 import org.synanton.extraction.domain.service.RequestCanonicalizer;
 import org.synanton.extraction.domain.service.SubmitExtractionService;
 import org.synanton.extraction.spi.port.IdempotencyStore;
 import org.synanton.extraction.spi.port.ModalityAdapter;
 import org.synanton.extraction.spi.port.OperationRepository;
+import org.synanton.extraction.spi.port.ResultStore;
 import org.synanton.extraction.spi.port.SourceObjectReader;
 
 import java.util.List;
@@ -46,15 +48,25 @@ public class DomainConfig {
     }
 
     @Bean
+    public OperationPersistence operationPersistence(
+            OperationRepository operationRepository,
+            ResultStore resultStore,
+            IdempotencyStore idempotencyStore) {
+        return new OperationPersistence(operationRepository, resultStore, idempotencyStore);
+    }
+
+    @Bean
     public SubmitExtractionService submitExtractionService(
             OperationRepository operationRepository,
             IdempotencyStore idempotencyStore,
             RequestCanonicalizer requestCanonicalizer,
+            OperationPersistence operationPersistence,
             ExtractionGatewayProperties properties) {
         return new SubmitExtractionService(
                 idempotencyStore,
                 operationRepository,
                 requestCanonicalizer,
+                operationPersistence,
                 properties);
     }
 

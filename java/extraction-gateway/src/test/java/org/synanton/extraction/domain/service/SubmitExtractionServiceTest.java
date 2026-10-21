@@ -42,6 +42,9 @@ class SubmitExtractionServiceTest {
     @Mock
     private RequestCanonicalizer requestCanonicalizer;
 
+    @Mock
+    private OperationPersistence operationPersistence;
+
     @InjectMocks
     private SubmitExtractionService submitExtractionService;
 
@@ -77,6 +80,7 @@ class SubmitExtractionServiceTest {
                 idempotencyStore,
                 operationRepository,
                 requestCanonicalizer,
+                new OperationPersistence(operationRepository, null, idempotencyStore),
                 properties(10),
                 () -> FIXED_NOW);
         SubmitExtractionCommand command = sampleCommand();
@@ -98,6 +102,7 @@ class SubmitExtractionServiceTest {
                 idempotencyStore,
                 operationRepository,
                 requestCanonicalizer,
+                operationPersistence,
                 properties(1),
                 () -> FIXED_NOW);
         SubmitExtractionCommand command = sampleCommand();

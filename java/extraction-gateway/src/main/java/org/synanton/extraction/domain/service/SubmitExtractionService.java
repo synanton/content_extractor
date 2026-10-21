@@ -27,6 +27,7 @@ public class SubmitExtractionService {
     private final OperationRepository operationRepository;
     private final IdempotencyStore idempotencyStore;
     private final RequestCanonicalizer requestCanonicalizer;
+    private final OperationPersistence operationPersistence;
     private final ExtractionGatewayProperties properties;
     private final Supplier<Instant> clock;
 
@@ -34,19 +35,22 @@ public class SubmitExtractionService {
             IdempotencyStore idempotencyStore,
             OperationRepository operationRepository,
             RequestCanonicalizer requestCanonicalizer,
+            OperationPersistence operationPersistence,
             ExtractionGatewayProperties properties) {
-        this(idempotencyStore, operationRepository, requestCanonicalizer, properties, Instant::now);
+        this(idempotencyStore, operationRepository, requestCanonicalizer, operationPersistence, properties, Instant::now);
     }
 
     public SubmitExtractionService(
             IdempotencyStore idempotencyStore,
             OperationRepository operationRepository,
             RequestCanonicalizer requestCanonicalizer,
+            OperationPersistence operationPersistence,
             ExtractionGatewayProperties properties,
             Supplier<Instant> clock) {
         this.operationRepository = operationRepository;
         this.idempotencyStore = idempotencyStore;
         this.requestCanonicalizer = requestCanonicalizer;
+        this.operationPersistence = operationPersistence;
         this.properties = properties;
         this.clock = clock;
     }
@@ -141,12 +145,7 @@ public class SubmitExtractionService {
                         item.source().sha256(),
                         item.source().sizeBytes()))
                 .toList();
-        operationRepository.saveNewOperation(operation, sources);
-        idempotencyStore.store(
-                command.tenantId(),
-                command.idempotencyKey(),
-                requestHash,
-                operation.id());
+        operationPersistence.persist(operation, sources, null, requestHash);
     }
 
     private List<ItemRecord> buildQueuedItems(SubmitExtractionCommand command) {

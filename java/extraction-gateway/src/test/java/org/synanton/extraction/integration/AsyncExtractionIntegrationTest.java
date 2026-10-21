@@ -34,6 +34,7 @@ import org.synanton.extraction.domain.service.CancelOperationService;
 import org.synanton.extraction.domain.service.CapacityService;
 import org.synanton.extraction.domain.service.ExtractSyncService;
 import org.synanton.extraction.domain.service.ExtractionRouter;
+import org.synanton.extraction.domain.service.OperationPersistence;
 import org.synanton.extraction.domain.service.OperationQueryService;
 import org.synanton.extraction.domain.service.RequestCanonicalizer;
 import org.synanton.extraction.domain.service.SubmitExtractionService;
@@ -84,6 +85,7 @@ class AsyncExtractionIntegrationTest {
     private ExtractionServiceGrpc.ExtractionServiceBlockingStub client;
     private ExtractionWorker worker;
     private InMemorySourceObjectReader objectStore;
+    private JdbcTemplate jdbcTemplate;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -98,11 +100,13 @@ class AsyncExtractionIntegrationTest {
         dataSource.setUrl(postgres.getJdbcUrl());
         dataSource.setUsername(postgres.getUsername());
         dataSource.setPassword(postgres.getPassword());
-        JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+        jdbcTemplate = new JdbcTemplate(dataSource);
 
         JdbcOperationRepository operationRepository = new JdbcOperationRepository(jdbcTemplate, objectMapper);
         JdbcIdempotencyStore idempotencyStore = new JdbcIdempotencyStore(jdbcTemplate);
         JdbcResultStore resultStore = new JdbcResultStore(jdbcTemplate, objectMapper);
+        OperationPersistence operationPersistence =
+                new OperationPersistence(operationRepository, resultStore, idempotencyStore);
 
         ExtractionGatewayProperties properties = new ExtractionGatewayProperties();
         properties.getAsync().setWorkerPollIntervalMs(50);
@@ -117,15 +121,18 @@ class AsyncExtractionIntegrationTest {
                 properties,
                 new MicrometerExtractionMetrics(new SimpleMeterRegistry()));
 
+        TransactionTemplate transactionTemplate = new TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource));
         SubmitExtractionService submitExtractionService = new SubmitExtractionService(
                 idempotencyStore,
                 operationRepository,
                 new RequestCanonicalizer(),
+                operationPersistence,
                 properties,
                 () -> Instant.now(Clock.systemUTC()));
         OperationAdmissionExecutor admissionExecutor = new OperationAdmissionExecutor(
                 submitExtractionService,
-                new TransactionTemplate(new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource)));
+                transactionTemplate);
 
         ExtractionGrpcAdapter adapter = new ExtractionGrpcAdapter(
                 extractSyncService,
@@ -135,12 +142,16 @@ class AsyncExtractionIntegrationTest {
                 new CapacityService(operationRepository, extractSyncService.router(), properties),
                 operationRepository,
                 resultStore,
+                operationPersistence,
+                idempotencyStore,
+                new RequestCanonicalizer(),
+                transactionTemplate,
                 properties);
 
         worker = new ExtractionWorker(
                 operationRepository,
                 extractSyncService,
-                resultStore,
+                operationPersistence,
                 properties);
         worker.start();
 
@@ -249,5 +260,99 @@ class AsyncExtractionIntegrationTest {
                 .setOperationId(submitted.getOperationId())
                 .build());
         assertThat(result.getFlattenedText()).contains("Quarterly Report");
+    }
+
+    @Test
+    void shouldPersistSyncExtractionOperationResultAndIdempotency() throws Exception {
+        byte[] body = "Sync extraction body".getBytes(StandardCharsets.UTF_8);
+        String sha = sha256(body);
+        objectStore.put("tenant-content", "docs/sync.txt", body);
+
+        ExtractionResult result = client.extractSync(syncRequest(
+                "tenant-a", "sync-job-1", "content-sync-1", "docs/sync.txt", body, sha));
+
+        assertThat(result.getStatus()).isEqualTo(ExtractionStatus.STATUS_COMPLETED);
+        assertThat(result.getOperationId()).isNotBlank();
+        assertThat(count("extraction_operations", "tenant_id = ? AND operation_id = ?",
+                "tenant-a", result.getOperationId())).isEqualTo(1);
+        assertThat(count("extraction_results", "tenant_id = ? AND operation_id = ?",
+                "tenant-a", result.getOperationId())).isEqualTo(1);
+        assertThat(count("extraction_idempotency", "tenant_id = ? AND idempotency_key = ?",
+                "tenant-a", "sync-job-1")).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM extraction_operations WHERE operation_id = ?",
+                String.class, result.getOperationId())).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void shouldReturnExistingOperationForDuplicateSyncKey() throws Exception {
+        byte[] body = "Duplicate sync body".getBytes(StandardCharsets.UTF_8);
+        String sha = sha256(body);
+        objectStore.put("tenant-content", "docs/sync-duplicate.txt", body);
+        SubmitExtractionRequest request = syncRequest(
+                "tenant-a", "sync-duplicate", "content-sync-duplicate", "docs/sync-duplicate.txt", body, sha);
+
+        ExtractionResult first = client.extractSync(request);
+        ExtractionResult second = client.extractSync(request);
+
+        assertThat(second.getOperationId()).isEqualTo(first.getOperationId());
+        assertThat(count("extraction_operations", "tenant_id = ? AND idempotency_key = ?",
+                "tenant-a", "sync-duplicate")).isEqualTo(1);
+        assertThat(count("extraction_results", "tenant_id = ? AND operation_id = ?",
+                "tenant-a", first.getOperationId())).isEqualTo(1);
+    }
+
+    @Test
+    void shouldPersistFailedSyncExtraction() throws Exception {
+        byte[] body = "Missing object body".getBytes(StandardCharsets.UTF_8);
+        String sha = sha256(body);
+
+        ExtractionResult result = client.extractSync(syncRequest(
+                "tenant-a", "sync-missing", "content-sync-missing", "docs/missing.txt", body, sha));
+
+        assertThat(result.getStatus()).isEqualTo(ExtractionStatus.STATUS_FAILED);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM extraction_operations WHERE operation_id = ?",
+                String.class, result.getOperationId())).isEqualTo("FAILED");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT error_code FROM extraction_operation_items WHERE operation_id = ?",
+                String.class, result.getOperationId())).isNotBlank();
+        assertThat(count("extraction_results", "tenant_id = ? AND operation_id = ?",
+                "tenant-a", result.getOperationId())).isEqualTo(1);
+    }
+
+    private int count(String table, String where, Object... args) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM " + table + " WHERE " + where,
+                Integer.class,
+                args);
+        return count == null ? 0 : count;
+    }
+
+    private static SubmitExtractionRequest syncRequest(
+            String tenantId,
+            String idempotencyKey,
+            String contentRefId,
+            String objectKey,
+            byte[] body,
+            String sha) {
+        return SubmitExtractionRequest.newBuilder()
+                .setTenantId(tenantId)
+                .setIdempotencyKey(idempotencyKey)
+                .setPriorityClass(PriorityClass.PRIORITY_NORMAL)
+                .setItem(ExtractionRequestItem.newBuilder()
+                        .setContentRefId(contentRefId)
+                        .setMediaType("text/plain")
+                        .setSource(ObjectReference.newBuilder()
+                                .setBucket("tenant-content")
+                                .setKey(objectKey)
+                                .setSha256(sha)
+                                .setSizeBytes(body.length))
+                        .build())
+                .build();
+    }
+
+    private static String sha256(byte[] body) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
     }
 }

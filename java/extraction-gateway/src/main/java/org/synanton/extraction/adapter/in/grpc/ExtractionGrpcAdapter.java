@@ -3,28 +3,38 @@ package org.synanton.extraction.adapter.in.grpc;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.synanton.extraction.spi.model.ExtractionFailure;
+import org.synanton.extraction.adapter.out.persistence.JdbcIdempotencyStore.DuplicateIdempotencyKeyException;
 import org.synanton.extraction.adapter.out.persistence.JdbcIdempotencyStore.IdempotencyStoreUnavailableException;
 import org.synanton.extraction.adapter.out.persistence.OperationAdmissionExecutor;
 import org.synanton.extraction.config.ExtractionGatewayProperties;
+import org.synanton.extraction.domain.model.ExtractionItemCommand;
 import org.synanton.extraction.domain.model.SubmitExtractionCommand;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome;
 import org.synanton.extraction.domain.service.CancelOperationService;
 import org.synanton.extraction.domain.service.CapacityService;
 import org.synanton.extraction.domain.service.ExtractSyncService;
+import org.synanton.extraction.domain.service.OperationPersistence;
 import org.synanton.extraction.domain.service.OperationQueryService;
+import org.synanton.extraction.domain.service.RequestCanonicalizer;
 import org.synanton.extraction.domain.service.SubmitExtractionService;
 import org.synanton.extraction.spi.model.AdapterResult;
+import org.synanton.extraction.spi.model.OperationState;
+import org.synanton.extraction.spi.port.IdempotencyStore;
 import org.synanton.extraction.spi.port.ModalityAdapter;
 import org.synanton.extraction.spi.port.OperationRepository;
 import org.synanton.extraction.spi.port.OperationRepository.ItemRecord;
+import org.synanton.extraction.spi.port.OperationRepository.ItemSource;
 import org.synanton.extraction.spi.port.ResultStore;
 import org.synanton.extraction.v1.*;
 import org.synanton.extraction.v1.validation.ExtractionRequestValidator;
 import org.synanton.extraction.v1.validation.FieldViolation;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Component
@@ -37,6 +47,10 @@ public class ExtractionGrpcAdapter extends ExtractionServiceGrpc.ExtractionServi
     private final CapacityService capacityService;
     private final OperationRepository operationRepository;
     private final ResultStore resultStore;
+    private final OperationPersistence operationPersistence;
+    private final IdempotencyStore idempotencyStore;
+    private final RequestCanonicalizer requestCanonicalizer;
+    private final TransactionTemplate transactionTemplate;
     private final ExtractionGatewayProperties properties;
 
     public ExtractionGrpcAdapter(
@@ -47,6 +61,10 @@ public class ExtractionGrpcAdapter extends ExtractionServiceGrpc.ExtractionServi
             CapacityService capacityService,
             OperationRepository operationRepository,
             ResultStore resultStore,
+            OperationPersistence operationPersistence,
+            IdempotencyStore idempotencyStore,
+            RequestCanonicalizer requestCanonicalizer,
+            TransactionTemplate transactionTemplate,
             ExtractionGatewayProperties properties) {
         this.extractSyncService = extractSyncService;
         this.admissionExecutor = admissionExecutor;
@@ -55,6 +73,10 @@ public class ExtractionGrpcAdapter extends ExtractionServiceGrpc.ExtractionServi
         this.capacityService = capacityService;
         this.operationRepository = operationRepository;
         this.resultStore = resultStore;
+        this.operationPersistence = operationPersistence;
+        this.idempotencyStore = idempotencyStore;
+        this.requestCanonicalizer = requestCanonicalizer;
+        this.transactionTemplate = transactionTemplate;
         this.properties = properties;
     }
 
@@ -68,16 +90,165 @@ public class ExtractionGrpcAdapter extends ExtractionServiceGrpc.ExtractionServi
             return;
         }
 
-        var item = request.getItem();
+        SubmitExtractionCommand command = RequestMapper.toCommand(request);
+        String requestHash = requestCanonicalizer.canonicalize(command);
+        String tenantId = command.tenantId();
+        String idempotencyKey = command.idempotencyKey();
+
+        if (idempotencyKey != null && !idempotencyKey.isBlank()) {
+            try {
+                Optional<IdempotencyStore.Entry> existing =
+                        idempotencyStore.findEntry(tenantId, idempotencyKey);
+                if (existing.isPresent()) {
+                    returnExistingOperation(tenantId, existing.get(), requestHash, responseObserver);
+                    return;
+                }
+            } catch (IdempotencyStoreUnavailableException e) {
+                responseObserver.onError(Status.UNAVAILABLE
+                        .withDescription("Idempotency store unavailable")
+                        .asRuntimeException());
+                return;
+            }
+        }
+
+        String operationId = UUID.randomUUID().toString();
+        ExtractionItemCommand item = command.items().get(0);
         SyncExtractionOutcome outcome = extractSyncService.extract(
-                request.getTenantId(),
-                request.getIdempotencyKey(),
-                item.getContentRefId(),
-                ResultMapper.toObjectRef(item.getSource()),
-                item.getMediaType(),
-                ResultMapper.toOptions(item.getOptions()),
-                ResultMapper.expiresAt(request));
+                operationId,
+                tenantId,
+                idempotencyKey,
+                item.contentRefId(),
+                item.source(),
+                item.mediaType(),
+                item.options(),
+                command.expiresAt());
+
+        OperationRepository.ExtractionOperation operation =
+                toPersistedOperation(operationId, command, outcome);
+        List<ItemSource> sources = List.of(new ItemSource(
+                item.source().bucket(),
+                item.source().key(),
+                item.source().version(),
+                item.source().sha256(),
+                item.source().sizeBytes()));
+        AdapterResult storedResult = toAdapterResult(outcome);
+
+        try {
+            transactionTemplate.execute(status -> {
+                operationPersistence.persist(operation, sources, storedResult, requestHash);
+                return null;
+            });
+        } catch (DuplicateIdempotencyKeyException duplicate) {
+            // A concurrent submit won the idempotency race; return its operation.
+            try {
+                returnExistingOperation(
+                        tenantId,
+                        idempotencyStore.findEntry(tenantId, idempotencyKey)
+                                .orElseThrow(() -> duplicate),
+                        requestHash,
+                        responseObserver);
+            } catch (IdempotencyStoreUnavailableException e) {
+                responseObserver.onError(Status.UNAVAILABLE
+                        .withDescription("Idempotency store unavailable")
+                        .asRuntimeException());
+            }
+            return;
+        }
+
         responseObserver.onNext(ResultMapper.toResult(outcome, request));
+        responseObserver.onCompleted();
+    }
+
+    private OperationRepository.ExtractionOperation toPersistedOperation(
+            String operationId,
+            SubmitExtractionCommand command,
+            SyncExtractionOutcome outcome) {
+        OperationState state = switch (outcome.status()) {
+            case COMPLETED -> OperationState.COMPLETED;
+            case PARTIAL -> OperationState.PARTIAL;
+            case FAILED -> OperationState.FAILED;
+            case EXPIRED -> OperationState.EXPIRED;
+        };
+        ExtractionItemCommand item = command.items().get(0);
+        ItemRecord record = new ItemRecord(
+                0,
+                item.contentRefId(),
+                item.mediaType(),
+                state,
+                outcome.featureStates(),
+                outcome.failure() != null ? outcome.failure().errorCode() : null,
+                outcome.failure() != null ? outcome.failure().diagnostic() : null);
+        Instant now = Instant.now();
+        return new OperationRepository.ExtractionOperation(
+                operationId,
+                command.tenantId(),
+                state,
+                command.idempotencyKey(),
+                command.priority(),
+                now,
+                now,
+                command.expiresAt(),
+                SubmitExtractionService.ADMISSION_ADMITTED,
+                List.of(record));
+    }
+
+    private static AdapterResult toAdapterResult(SyncExtractionOutcome outcome) {
+        if (outcome.document() != null) {
+            return AdapterResult.success(outcome.document(), outcome.featureStates());
+        }
+        ExtractionFailure failure = outcome.failure() != null
+                ? outcome.failure()
+                : ExtractionFailure.internalError("Unknown failure");
+        return AdapterResult.failed(failure, outcome.featureStates());
+    }
+
+    private void returnExistingOperation(
+            String tenantId,
+            IdempotencyStore.Entry entry,
+            String requestHash,
+            StreamObserver<ExtractionResult> responseObserver) {
+        if (!entry.requestHash().equals(requestHash)) {
+            responseObserver.onError(Status.INVALID_ARGUMENT
+                    .withDescription("Idempotency key reused with different request semantics")
+                    .asRuntimeException());
+            return;
+        }
+
+        Optional<OperationRepository.ExtractionOperation> existing = operationRepository.findById(entry.operationId())
+                .filter(operation -> operation.tenantId().equals(tenantId));
+        if (existing.isEmpty()) {
+            responseObserver.onError(Status.NOT_FOUND
+                    .withDescription("Existing operation not found")
+                    .asRuntimeException());
+            return;
+        }
+
+        Optional<ItemRecord> item = existing.get().items().stream()
+                .filter(candidate -> candidate.itemIndex() == 0)
+                .findFirst();
+        if (item.isEmpty()) {
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("Existing operation has no item")
+                    .asRuntimeException());
+            return;
+        }
+        if (!item.get().state().isTerminal()) {
+            responseObserver.onError(Status.FAILED_PRECONDITION
+                    .withDescription("Existing operation is not complete")
+                    .asRuntimeException());
+            return;
+        }
+
+        GetResultRequest getResult = GetResultRequest.newBuilder()
+                .setTenantId(tenantId)
+                .setOperationId(entry.operationId())
+                .setItemIndex(0)
+                .build();
+        Optional<AdapterResult> stored = resultStore.load(tenantId, entry.operationId(), 0);
+        SyncExtractionOutcome outcome = stored
+                .map(adapterResult -> toOutcome(getResult, item.get(), adapterResult))
+                .orElseGet(() -> failedOutcome(getResult, item.get()));
+        responseObserver.onNext(OperationMapper.toResult(outcome, item.get()));
         responseObserver.onCompleted();
     }
 
