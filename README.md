@@ -15,6 +15,22 @@ It answers one fundamental question:
 
 The extraction plane is deliberately separated from knowledge processing. It extracts and structures observable content; downstream Synanton components determine what that content means in a business domain.
 
+## Durability and Phase 1 status (2026-10-21)
+
+- Sync extractions persist through `OperationPersistence`: operation, item
+  source, result, and idempotency rows in one transaction at the gRPC
+  `extractSync` boundary.
+- Async submit persists the operation/idempotency; `ExtractionWorker` writes
+  item results through `OperationPersistence.storeResult` — one result writer.
+- Duplicate idempotency key: same request hash returns the stored
+  operation/result; conflicting semantics are rejected. The platform's
+  duplicate request identity returns 409 (#344); the gateway path never
+  returns 500 for this case.
+- Feature-unsupported results (for example the text adapter with unsupported
+  tables/embedded images) are `COMPLETED` at the gateway; the platform derives
+  the ingestion-run `PARTIAL` from intent vs outcome (#345/#346).
+- Startup logs the effective persistence configuration and table presence.
+
 ------
 
 ## Overview
