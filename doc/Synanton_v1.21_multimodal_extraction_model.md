@@ -2,9 +2,15 @@
 
 **Document ID:** SNTP-7-DESIGN-SCEP-1.21  
 **Date:** 2026-08-24  
-**Status:** PROPOSED - ARCHITECTURAL DESIGN IN PROGRESS  
+**Status:** Historical proposal — superseded as platform architecture authority
 **Basis:** Synanton v1.21 Structured Content Extraction Plane proposal  
 **Purpose:** Define a concrete multimodal extraction model and PoC examples while preserving the deployment-neutral extraction contract.
+
+> **Superseded notice (2026-10-21):** Retained as design history, not a
+> capability statement. Platform Architecture 1.0 and Design 1.22 Part IX are
+> the current platform architecture sources. The current repository README and
+> adapter implementations define the implemented formats; audio/image/video
+> adapters currently report unsupported.
 
 ---
 
@@ -2166,4 +2172,3 @@ The implementation behind it can change.
 3. OpenDataLoader PDF JSON schema. urlOpenDataLoader PDF JSON schemahttps://github.com/opendataloader-project/opendataloader-pdf/blob/main/schema.json
 4. OpenDataLoader PDF options. urlOpenDataLoader PDF optionshttps://github.com/opendataloader-project/opendataloader-pdf/blob/main/options.json
 5. OpenDataLoader Java examples. urlOpenDataLoader PDF exampleshttps://github.com/opendataloader-project/opendataloader-pdf-examples
-

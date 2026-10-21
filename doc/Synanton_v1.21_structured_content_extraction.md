@@ -2,9 +2,16 @@
 
 **Document ID:** SNTP-6-PROP-1.21-SCEP-REV1  
 **Date:** 2026-08-24  
-**Status:** PROPOSED — ARCHITECTURAL DESIGN IN PROGRESS  
+**Status:** Historical proposal — superseded as platform architecture authority
 **Amends:** Part IX (§65–§79) of `docs/architecture/synanton-design-1.21.md` (at the time of writing; that document is now archived at `docs/architecture/archive/synanton-design-1.21.md` in the platform repo and folded into `synanton-design-1.22.md` Part IX — see the platform repo's [`synanton-platform-architecture-1.0.md`](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md) for the current design hierarchy)  
 **Scope:** Structured content extraction architecture and external contract
+
+> **Superseded notice (2026-10-21):** This proposal is retained as design
+> history. Platform Architecture 1.0 and Design 1.22 Part IX are the current
+> platform architecture sources; the implemented `synanton.extraction.v1`
+> contract and supported behavior are documented in the repository README and
+> code. The proposal's multimodal scope is not a claim that those modalities
+> are implemented.
 
 ---
 
