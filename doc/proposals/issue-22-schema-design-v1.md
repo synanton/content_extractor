@@ -106,12 +106,30 @@ Existing values 0–15 remain. Proposed additions:
 
 ```proto
 enum DocumentElementType {
-  // existing values 0-15 unchanged
+  ELEMENT_TYPE_UNSPECIFIED = 0;
+  ELEMENT_PARAGRAPH  = 1;
+  ELEMENT_HEADING    = 2;
+  ELEMENT_LIST       = 3;
+  ELEMENT_LIST_ITEM  = 4;
+  ELEMENT_TABLE      = 5;
+  ELEMENT_TABLE_ROW  = 6;
+  ELEMENT_TABLE_CELL = 7;
+  ELEMENT_IMAGE      = 8;
+  ELEMENT_FORMULA    = 9;
+  ELEMENT_CAPTION    = 10;
+  ELEMENT_FOOTNOTE   = 11;
+  ELEMENT_HEADER     = 12;
+  ELEMENT_FOOTER     = 13;
+  ELEMENT_CODE_BLOCK = 14;
+  ELEMENT_PAGE_BREAK = 15;
+
   ELEMENT_SECTION = 16;
-  ELEMENT_FIGURE = 17;
+  ELEMENT_FIGURE  = 17;
   ELEMENT_UNKNOWN = 18;
 }
 ```
+
+All proposed enum values are package-scoped under `synanton.extraction.v1` and must be globally unique. Existing values 0–15 are shown exactly; additions 16–18 use the existing `ELEMENT_` prefix.
 
 `DOCUMENT` is not added as an element type. `SECTION` and `FIGURE` are structural distinctions; `UNKNOWN` is explicit, never silently mapped to `PARAGRAPH`.
 
@@ -243,6 +261,14 @@ Rules:
 - No unit conversion is implicit.
 - Text layer is a derived representation; `SourceBinding.DERIVED_REPRESENTATION` binds to origin.
 
+Text-layer integrity rules:
+
+- `derivation_execution_id` must resolve in `ExtractionProvenance.executions`.
+- `origin_document_id`, `origin_source_digest`, and `origin_source_version` must match the enclosing source and source binding.
+- `text_layer_digest` must hash the exact extracted text bytes in `encoding`; changing bytes or encoding requires a new text-layer identity.
+- A `SOURCE_TEXT_LAYER` range with missing, unresolved, or inconsistent `TextLayerIdentity` is invalid.
+- A text layer cannot be used as origin identity.
+
 ### 3.5 PDF geometry
 
 ```proto
@@ -262,6 +288,19 @@ Rules:
 - Platform PDFBox top-left adjusted coordinates require transformation or explicit labeling.
 - Missing geometry is `UNAVAILABLE`; no zero bbox fabrication.
 - Rotation is retained.
+
+Validation combinations:
+
+| page_number | bbox | Result |
+|---:|---|---|
+| 0 | absent | Geometry unavailable; precision must be `UNAVAILABLE` |
+| >0 | absent | Page known, geometry unavailable; no fabricated bbox |
+| 0 | present | Invalid |
+| >0 | present | Valid only with finite coordinates, `x0 <= x1`, `y0 <= y1`, non-empty coordinate system/unit |
+
+- `rotation` is 0, 90, 180, or 270; no other values are valid in v1.
+- Bbox coordinates are in the declared `coordinate_system`; rotation metadata describes the page orientation and must not be applied implicitly.
+- A bbox without a page number or coordinate semantics is invalid, not approximate.
 
 ### 3.6 Canonical text
 
@@ -355,8 +394,8 @@ enum ExecutionAttribution {
 
 message QualityReport {
   QualityStatus status = 1;
-  double completeness = 2;         // 0.0..1.0, optional
-  double confidence = 3;           // 0.0..1.0, optional
+  optional double completeness = 2; // unset = unknown; 0.0 = measured zero
+  optional double confidence = 3;   // unset = unknown; 0.0 = measured zero
   repeated string warnings = 4;
 }
 
@@ -367,13 +406,15 @@ enum QualityStatus {
   QUALITY_STATUS_PARTIAL = 3;
   QUALITY_STATUS_UNKNOWN = 4;
 }
+
+Presence rule: `completeness`/`confidence` use proto3 presence. Unset means unknown; a set value of `0.0` means a measured zero. Consumers must not treat unset as zero.
 ```
 
 ### 4.2 execution_ids membership rule
 
 `execution_ids` is the set of executions **directly responsible for producing that element**.
 
-- Empty + `INHERITED`: inherit `primary_execution_id`.
+- Empty + `INHERITED`: inherit `primary_execution_id`; under the inheritance convention, the primary execution is the direct producer.
 - Empty + `UNKNOWN`: provenance unavailable/cannot be established.
 - Empty + `NONE_KNOWN`: provenance is known not to exist.
 - Non-empty + `EXPLICIT`: all IDs resolve; duplicates invalid.
@@ -464,6 +505,13 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 | Empty + `UNKNOWN` | Valid unavailable provenance |
 | Empty + `NONE_KNOWN` | Valid only if schema decision is Approve; invalid/unsupported if deferred |
 | `TextRange.coordinate_space=CANONICAL_TEXT` | Invalid; use `CanonicalTextRange` |
+| PDF `page_number=0` with bbox | Invalid |
+| PDF bbox with non-finite/reversed coordinates | Invalid |
+| PDF bbox without page/coordinate system/unit | Invalid |
+| Text layer derivation execution unresolved | Invalid |
+| Text layer origin/source digest mismatch | Invalid |
+| `SOURCE_TEXT_LAYER` without `TextLayerIdentity` | Invalid |
+| Quality completeness/confidence unset | Unknown; not 0.0 |
 | Multiple source locations | All retained independently |
 | PDF text range without text layer | Invalid/unavailable |
 | PDF raw bytes as original text range | Invalid |
@@ -480,6 +528,10 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 - `TextRange` rejects canonical coordinate space.
 - Multiple location records on one element.
 - PDF geometry and text-layer range coexistence.
+- PDF page/bbox combination validation and rotation values.
+- Text-layer derivation/origin/digest referential integrity.
+- Inherited attribution treats primary execution as direct producer.
+- Unset quality fields remain unknown; explicit 0.0 remains zero.
 - Markdown original-source and canonical ranges.
 - Unicode normalization, line endings, BOM exclusion, half-open ranges.
 - Source binding inheritance/mismatch/stale source.
@@ -496,7 +548,8 @@ This schema design is ready for review only if:
 - `NONE_KNOWN` is explicitly marked **Approve** or **Defer** using the decision in 4.3.
 - `execution_ids` direct-production/set semantics are accepted.
 - Validation rules are accepted as normative.
-- `FormatReference` and `QualityReport` definitions are accepted.
+- `FormatReference` and `QualityReport` definitions are accepted, including optional presence semantics.
+- Exact enum names/values and package-level uniqueness are accepted.
 
 Approval of this document would authorize a separate protobuf change PR. It would not authorize adapters, #20/#21, #950, or #947.
 
