@@ -2,7 +2,7 @@
 
 **Status:** Review proposal. Non-normative. No protobuf or production behavior is changed here.  
 **Scope:** Content Extractor contract evolution for format-neutral documents and typed source locations.  
-**Revision:** Addresses the #23 review: multiple simultaneous location records, normative binding/precision rules, canonical identity, projection outcomes, and execution-provenance integrity.  
+**Revision:** Addresses the #23 second review: origin/derived identity, deterministic hashing, explicit unknown execution attribution, projection identity, and remaining ambiguity cleanup.  
 **Related:** #20 (PDF parity), #21 (Markdown parity), #950 (production ownership transition), #947 (evidence compatibility).  
 **Guardrails:** No parser migration, benchmark execution, semantic model execution, frozen artifact changes, or issue restructuring in this proposal.
 
@@ -261,9 +261,16 @@ message DocumentElement {
   repeated SourceLocation source_locations = 10;
   CanonicalTextRange canonical_text_range = 11;
 
-  // Execution(s) that produced this element. Empty inherits the document's
-  // primary execution. Repeated permits merged/multi-stage elements.
+  // Execution(s) that produced this element. Repeated permits merged/multi-stage elements.
   repeated string execution_ids = 12;
+  ExecutionAttribution execution_attribution = 13;
+}
+
+enum ExecutionAttribution {
+  EXECUTION_ATTRIBUTION_UNSPECIFIED = 0; // invalid
+  EXECUTION_ATTRIBUTION_INHERITED = 1;   // inherit document primary execution
+  EXECUTION_ATTRIBUTION_EXPLICIT = 2;    // execution_ids are authoritative
+  EXECUTION_ATTRIBUTION_UNKNOWN = 3;     // known absence of provenance
 }
 ```
 
@@ -291,16 +298,17 @@ message SourceLocation {
 
 message SourceBinding {
   BindingKind kind = 1;
-  string document_id = 2;           // required for EXPLICIT/DERIVED
-  string source_digest = 3;         // immutable source digest
-  string source_version = 4;        // source version, if available
+  // Origin identity is always the original document, never a derived layer.
+  string origin_document_id = 2;
+  string origin_source_digest = 3;
+  string origin_source_version = 4;
 }
 
 enum BindingKind {
-  BINDING_KIND_UNSPECIFIED = 0;     // invalid for a usable location
-  BINDING_KIND_INHERIT_DOCUMENT = 1;
-  BINDING_KIND_EXPLICIT = 2;
-  BINDING_KIND_DERIVED = 3;         // references a different/derived source
+  BINDING_KIND_UNSPECIFIED = 0;              // invalid for a usable location
+  BINDING_KIND_INHERIT_DOCUMENT = 1;         // origin = enclosing document
+  BINDING_KIND_EXPLICIT_ORIGIN = 2;          // origin must match enclosing document
+  BINDING_KIND_DERIVED_REPRESENTATION = 3;   // origin + derived representation
 }
 
 enum LocationPrecision {
@@ -323,11 +331,12 @@ The oneof is now safe because it is per record; multiple records are allowed on 
 
 Normative rules:
 
-1. Every location record resolves to a source identity. `INHERIT_DOCUMENT` resolves to the enclosing document's immutable source identity/version/digest. `EXPLICIT` must match it. `DERIVED` must identify its actual source.
-2. `BINDING_KIND_UNSPECIFIED`, `LOCATION_PRECISION_UNSPECIFIED`, and `REPRODUCIBILITY_UNSPECIFIED` are invalid for a usable location.
-3. Every variant declares its coordinate system and units. Missing required semantics make the record invalid or `UNAVAILABLE`, never exact.
-4. A structurally present record is not automatically usable. Usable requires valid binding, explicit coordinate semantics, and `EXACT` or `APPROXIMATE` precision.
-5. A stale digest/version mismatch invalidates the location; it must not be silently reused against a replaced source.
+1. `SourceBinding` identifies origin identity. `INHERIT_DOCUMENT` resolves to the enclosing document's immutable source identity/version/digest. `EXPLICIT_ORIGIN` must match it. `DERIVED_REPRESENTATION` binds to the origin but requires the location variant to identify the derived representation separately.
+2. A derived representation (for example `TextLayerIdentity`) carries its own representation ID, digest, encoding, and derivation execution. It must not be conflated with the origin document digest.
+3. `BINDING_KIND_UNSPECIFIED`, `LOCATION_PRECISION_UNSPECIFIED`, and `REPRODUCIBILITY_UNSPECIFIED` are invalid for a usable location.
+4. Every variant declares its coordinate system and units. Missing required semantics make the record invalid or `UNAVAILABLE`, never exact.
+5. A structurally present record is not automatically usable. Usable requires valid binding, explicit coordinate semantics, and `EXACT` or `APPROXIMATE` precision.
+6. A stale digest/version mismatch invalidates the location; it must not be silently reused against a replaced source.
 
 ### 4.4 Text ranges
 
@@ -344,12 +353,13 @@ message TextRange {
 
 message TextLayerIdentity {
   string text_layer_id = 1;
-  string text_layer_digest = 2;     // SHA-256 of the declared extracted text bytes
-  string encoding = 3;              // e.g. UTF-8, UTF-16LE
-  string source_document_id = 4;
-  string source_digest = 5;
-  string extraction_execution_id = 6;
-  string extraction_layer_version = 7;
+  string text_layer_digest = 2;       // SHA-256 of the declared extracted text bytes
+  string encoding = 3;                // e.g. UTF-8, UTF-16LE
+  string origin_document_id = 4;      // original document, not the text layer
+  string origin_source_digest = 5;    // original source digest
+  string origin_source_version = 6;
+  string derivation_execution_id = 7; // execution that produced this layer
+  string extraction_layer_version = 8;
 }
 
 enum OffsetUnit {
@@ -389,7 +399,7 @@ Normative defaults:
 - No canonical offset is valid as an `ORIGINAL_SOURCE` record.
 - No unit may be silently converted. A producer that changes units must emit a new record with explicit semantics.
 - `ORIGINAL_SOURCE` is valid only when the source itself is text (for example Markdown/TXT). Raw PDF bytes are not UTF-8 text; PDF text ranges require `SOURCE_TEXT_LAYER`.
-- A `SOURCE_TEXT_LAYER` range requires `TextLayerIdentity` and must identify the extraction execution and source digest. The text layer is a derived source representation; use a `DERIVED` source binding that resolves to the original document source. Without this identity, PDF text-range parity is unavailable.
+- A `SOURCE_TEXT_LAYER` range requires `TextLayerIdentity` and must identify the extraction execution and source digest. The text layer is a derived source representation; use a `DERIVED_REPRESENTATION` source binding that resolves to the original document source. Without this identity, PDF text-range parity is unavailable.
 - A PDF geometry-only result remains valid; the missing text layer must remain explicit, not approximated from bbox.
 
 ### 4.5 Canonical text range and identity
@@ -416,6 +426,8 @@ message CanonicalTextIdentity {
   string extraction_execution_id = 7;
   string normalization_profile = 8;
   string normalization_version = 9;
+  string projection_contract_id = 10;
+  string projection_contract_version = 11;
 }
 ```
 
@@ -423,7 +435,8 @@ Rules:
 
 - `canonical_text_digest` hashes the exact encoded canonical text, before applying range offsets.
 - `source_*` and `extraction_execution_id` must resolve to the enclosing document and a registered execution.
-- A changed parser, normalization profile, or projection rule creates a new canonical-text identity. Old ranges are not silently reused.
+- `projection_contract_id`/`projection_contract_version` identify the canonical projection rules.
+- A changed parser, normalization profile, projection contract, or encoding creates a new canonical-text identity. Old ranges are not silently reused.
 - Canonical ranges are separate from source records and may coexist with them.
 - An element may have several source records and at most one canonical range in this proposal; multiple canonical revisions require separate payloads or a future explicit collection.
 
@@ -441,7 +454,7 @@ Rules:
 
 - Encoding names are canonical and case-insensitive (`UTF-8`, `UTF-16LE`, `UTF-16BE`); the emitted value uses the canonical spelling.
 - Normalization occurs before encoding and before line-ending conversion unless the profile explicitly says otherwise.
-- The digest input has no BOM unless the encoding profile explicitly includes one.
+- The digest input excludes BOM bytes. A future BOM-including encoding profile requires a new versioned profile and a new canonical identity; it must not be silently mixed with the current rule.
 - Offsets are into the normalized code-point sequence as represented in the declared `unit`; they are not byte offsets into the digest encoding unless `unit=UTF8_BYTE`.
 - A change to source digest/version, extraction execution, normalization profile/version, line-ending policy, encoding, or projection rules creates a new canonical text identity.
 
@@ -521,8 +534,11 @@ Graph integrity rules:
 - Every parent `execution_id` resolves to a record in the same payload.
 - Parent edges are directed from child execution to its predecessor/input; cycles are invalid.
 - `RETRY` and `FALLBACK` describe replacement/attempt lineage; `INPUT_DEPENDENCY` and `MERGE` describe composition lineage.
-- A missing execution ID on an element means inherit the primary execution or explicit unknown, depending on document-level presence. An unresolved non-empty execution ID is a contract-integrity failure.
-- Unknown provenance (legacy/no execution record) is distinct from an unresolved reference. Unknown is representable; unresolved is invalid.
+- `execution_attribution=INHERITED` requires empty `execution_ids` and a document primary execution.
+- `execution_attribution=EXPLICIT` requires non-empty `execution_ids`; every ID must resolve.
+- `execution_attribution=UNKNOWN` requires empty `execution_ids` and explicitly records known absence of provenance; it does not inherit.
+- An unresolved non-empty execution ID is a contract-integrity failure, never unknown.
+- Unknown provenance (legacy/no execution record) is distinct from an unresolved reference.
 - `ExecutionOutcome` describes execution result; `QualityReport` describes output quality. A failed execution may appear as history but contributes no usable elements.
 
 Example: mixed PDF where page 1 text comes from a PDF parser and page 2 comes from OCR:
@@ -621,7 +637,7 @@ The only dispatcher-related facts in the contract are durable extraction provena
 | `DocumentElement.child_ids` | unchanged | Hierarchy remains |
 | `ContentProvenance` | unchanged | Already distinguishes embedded/OCR/generated/transcribed |
 | `PayloadDescriptor.processor_id/version` | remains payload-level | Do not duplicate as element provenance |
-| `DocumentElement` without execution IDs | inherits primary execution or `UNKNOWN` | No execution identity is invented |
+| `DocumentElement` without execution IDs | `ExecutionAttribution=INHERITED` or explicit `UNKNOWN` | No execution identity is invented |
 | Single-provider payload | one execution record or primary reference | Backward compatible |
 
 ### 5.1 Source identity consistency
@@ -630,7 +646,7 @@ The only dispatcher-related facts in the contract are durable extraction provena
 - Legacy `DocumentPayload.media_type` must equal `source.media_type` when both are non-empty; mismatch invalidates the document for structured use.
 - `SourceBinding.INHERIT_DOCUMENT` resolves to `DocumentPayload.source`; it does not repeat digest/version.
 - An explicit or derived binding must identify a source that resolves to an immutable digest. A binding that cannot resolve has `REPRODUCIBILITY_NOT_REPRODUCIBLE` or is unusable.
-- A location that repeats a digest/version must match the enclosing source unless its binding kind is `DERIVED`.
+- A location that repeats a digest/version must match the enclosing source unless its binding kind is `DERIVED_REPRESENTATION`.
 - A stale location retained after source replacement is invalid; consumers must revalidate digest/version before use.
 
 ### 5.2 Legacy payload conversion
@@ -664,11 +680,12 @@ New payload to old consumer:
 9. Contract mirror updates are atomic across Platform and Content Extractor.
 10. A capability declaration must describe which location types and precisions an adapter can produce.
 11. Execution IDs are stable within a payload; every non-empty element execution ID must resolve to a registered execution.
-12. Parent relationships use typed `ExecutionLink` entries (`RETRY`, `FALLBACK`, `INPUT_DEPENDENCY`, `MERGE`); they are provenance, not routing decisions.
-13. `ExecutionOutcome` and `QualityStatus` are distinct; failed executions may remain in history but contribute no usable output.
-14. `DOCUMENT`, `SECTION`, `FIGURE`, and `UNKNOWN` are proposed structural types; table cells retain cell-level structure and optional locations.
-15. Canonical offset units are explicit. `UTF16_CODE_UNIT` is the legacy Platform default, not a universal source unit.
-16. Canonical text identity includes source, execution, normalization profile/version, encoding, and digest; no canonical range is valid across a changed identity.
+12. `ExecutionAttribution` explicitly distinguishes inherited, explicit, and unknown provenance; unresolved IDs are invalid.
+13. Parent relationships use typed `ExecutionLink` entries (`RETRY`, `FALLBACK`, `INPUT_DEPENDENCY`, `MERGE`); they are provenance, not routing decisions.
+14. `ExecutionOutcome` and `QualityStatus` are distinct; failed executions may remain in history but contribute no usable output.
+15. `DOCUMENT`, `SECTION`, `FIGURE`, and `UNKNOWN` are proposed structural types; table cells retain cell-level structure and optional locations.
+16. Canonical offset units are explicit. `UTF16_CODE_UNIT` is the legacy Platform default, not a universal source unit.
+17. Canonical text identity includes source, execution, normalization profile/version, projection contract/version, encoding, and digest; no canonical range is valid across a changed identity.
 
 ## 7. Concrete examples
 
@@ -757,7 +774,9 @@ Source bytes are UTF-8; range is half-open and refers to the original Markdown b
       "source_version": "v1",
       "extraction_execution_id": "exec-md-1",
       "normalization_profile": "platform-markdown",
-      "normalization_version": "1"
+      "normalization_version": "1",
+      "projection_contract_id": "canonical-markdown-text",
+      "projection_contract_version": "1"
     },
     "unit": "UTF16_CODE_UNIT",
     "start": 118,
@@ -808,7 +827,7 @@ The repeated collection is required here: a single oneof alternative would lose 
     },
     {
       "location_id": "loc-text",
-      "source_binding": {"kind": "DERIVED", "document_id": "doc-1", "source_digest": "sha256:abc...", "source_version": "v1"},
+      "source_binding": {"kind": "DERIVED_REPRESENTATION", "origin_document_id": "doc-1", "origin_source_digest": "sha256:abc...", "origin_source_version": "v1"},
       "precision": "EXACT",
       "reproducibility": "EXACT_FROM_SOURCE",
       "text_range": {
@@ -822,9 +841,10 @@ The repeated collection is required here: a single oneof alternative would lose 
           "text_layer_id": "pdf-text-layer-1",
           "text_layer_digest": "sha256:layer...",
           "encoding": "UTF-8",
-          "source_document_id": "doc-1",
-          "source_digest": "sha256:abc...",
-          "extraction_execution_id": "exec-pdf-1",
+          "origin_document_id": "doc-1",
+          "origin_source_digest": "sha256:abc...",
+          "origin_source_version": "v1",
+          "derivation_execution_id": "exec-pdf-1",
           "extraction_layer_version": "1"
         }
       }
@@ -902,10 +922,11 @@ Projection records use `ProjectionOutcome`:
 4. A canonical range whose source digest or execution ID does not match is rejected or reported unavailable.
 5. A changed normalization profile/version invalidates old canonical ranges; no silent reuse.
 6. Hash test confirms normalization occurs before line-ending conversion/encoding and digest is over the exact encoded bytes.
-7. BOM, encoding-name casing, and line-ending differences produce the documented identity/digest result.
-8. `INHERIT_DOCUMENT` resolves to the document source; explicit matching binding succeeds; mismatched explicit binding fails validation.
-9. Source replacement with stale digest/version produces an invalid/unavailable result, not exact evidence.
-10. `UNSPECIFIED` binding, unit, coordinate space, precision, or reproducibility is not treated as exact.
+7. BOM, encoding-name casing, and line-ending differences produce the documented identity/digest result; BOM is excluded.
+8. A projection contract/version change produces a new canonical identity.
+9. `INHERIT_DOCUMENT` resolves to the document source; explicit matching binding succeeds; mismatched explicit binding fails validation.
+10. Source replacement with stale digest/version produces an invalid/unavailable result, not exact evidence.
+11. `UNSPECIFIED` binding, unit, coordinate space, precision, or reproducibility is not treated as exact.
 
 ### 9.5 Projection outcomes
 
@@ -943,11 +964,12 @@ Projection records use `ProjectionOutcome`:
 
 ### #22 — contract design
 
-**Ready for second design review, not schema implementation approval.**
+**Ready for final design decisions, not schema implementation approval.**
 
 - The original exclusive-location blocker is resolved.
 - PDF text layers are now a defined prerequisite rather than an implicit range.
-- Canonical hashing, execution-graph integrity, precision validation, and projection contracts are specified for review.
+- Origin versus derived representation identity is explicit.
+- Canonical hashing, execution-graph integrity, execution attribution, precision validation, and projection contracts are specified.
 - Remaining decisions are recorded in section 11 and require approval before schema implementation.
 
 ### #20 / #21 — adapter capabilities
@@ -956,7 +978,7 @@ Projection records use `ProjectionOutcome`:
 
 - Multiple simultaneous location records are now representable; the exclusive-oneof blocker is resolved in the proposal.
 - PDF geometry semantics are specified (page number, bbox, origin, units, rotation, per-record precision).
-- PDF text ranges are blocked on `SOURCE_TEXT_LAYER`/`TextLayerIdentity` approval; raw PDF bytes are not an original text source.
+- PDF text ranges require approved `SOURCE_TEXT_LAYER`/`TextLayerIdentity`; raw PDF bytes are not an original text source.
 - Markdown original and canonical ranges are specified separately, with canonical identity binding.
 - PDF/Markdown adapters still need concrete source-range extraction support.
 - The existing `PdfPayload`/`MarkdownPayload` alternatives are rejected: adapters target the common `DocumentPayload`.
@@ -990,31 +1012,33 @@ The following defaults are proposed for approval; they are not yet normative.
 |---|---|---|
 | Canonical unit | UTF-16 code units for legacy Platform canonical ranges; all units explicit; no silent conversion | Whether multiple canonical units may coexist |
 | Legacy PDF precision | Geometry may be exact in its coordinate system; historical evidence precision is `APPROXIMATE`; no source text range inferred | Validation rule for old payloads |
-| PDF text ranges | Use `SOURCE_TEXT_LAYER` plus `TextLayerIdentity`; raw PDF bytes are not `ORIGINAL_SOURCE` text | Approve extraction-layer identity semantics |
-| Canonical hashing | Decode -> normalize Unicode -> apply line endings -> encode -> SHA-256 over exact bytes | Approve encoding/BOM profile details |
+| PDF text ranges | `SOURCE_TEXT_LAYER` + `TextLayerIdentity`; origin and derived representation identities are distinct | Approve extraction-layer identity semantics |
+| Canonical hashing | Decode -> normalize -> line endings -> encode -> SHA-256; BOM excluded universally | Approve encoding profile |
+| Source binding | `INHERIT_DOCUMENT` / `EXPLICIT_ORIGIN` / `DERIVED_REPRESENTATION`; origin identity and derived representation identity are separate | Approve derived-identity linking rules |
 | Element types | Add `DOCUMENT`, `SECTION`, `FIGURE`, `UNKNOWN`; retain table row/cell types | Whether `DOCUMENT` is an element or root metadata |
 | Table cells | Cell-level elements and optional source locations | Whether cell spans need dedicated fields |
-| Source binding | `INHERIT_DOCUMENT` by default; explicit binding only for different/derived source | Whether derived sources need their own document ID |
 | Schema version | Separate wire compatibility from semantic capability version | Exact versioning policy |
 | Exporter ownership | Content Extractor owns canonical projections | Whether a separate exporter service is ever needed |
-| Execution cardinality | Elements may reference multiple executions; typed parent links | Whether merged elements need a dedicated merge record |
-| Execution graph | Unique IDs; resolvable parents; no cycles; unknown vs unresolved distinct | Sentinel representation for unknown execution |
+| Execution provenance | Explicit `INHERITED` / `EXPLICIT` / `UNKNOWN` attribution; typed links; unknown and unresolved are different | Approve attribution enum/field numbers |
+| Execution graph | Unique IDs; resolvable parents; no cycles; unknown vs unresolved distinct | None beyond approval |
 | Precision | Per-location validation criteria in 4.6.1 | Approval of criteria |
 | Projection | Contract-relative lossless/lossy/unsupported with `contract_id/version` | Approval of projection contracts |
+| Canonical identity | Includes source, execution, normalization, projection contract, encoding, and digest | Approve hash/profile versioning |
 | Quality | Execution outcome is separate from quality status | Which quality metrics are durable |
 
-Remaining unresolved questions:
+Remaining approval items:
 
-1. Exact canonical-text digest input for UTF-16 BOM and encoding-name canonicalization.
-2. Whether source ranges on PDF text require a separate text-layer identity in addition to page/bbox (proposed: yes, `TextLayerIdentity`).
-3. Whether `UNKNOWN` execution identity is represented by an empty list or an explicit sentinel.
-4. How table cell spans and cell-level locations are versioned.
-5. Whether audio/video transcript documents reuse the same document class or stay modality payloads.
-6. Whether merged elements require a dedicated merge record in addition to repeated execution IDs.
+1. Approve `TextLayerIdentity` and extraction-layer versioning for PDF text ranges.
+2. Approve the canonical hash encoding/BOM profile as specified.
+3. Approve `ExecutionAttribution` field/enum semantics.
+4. Decide whether `DOCUMENT` is an element or only root metadata.
+5. Define table cell-span/versioning requirements.
+6. Decide whether audio/video transcripts use the document class or remain modality payloads.
+7. Decide whether merged elements need a dedicated merge record in addition to repeated execution IDs.
 
 ## 12. Readiness conclusion
 
-- **Contract design:** Ready for second design review. This is not schema implementation approval.
+- **Contract design:** Ready for final design decisions. This is not schema implementation approval.
 - **#20:** Conditional; PDF text-range parity requires approval of `SOURCE_TEXT_LAYER`/`TextLayerIdentity`.
 - **#21:** Conditional; Markdown structure and source/canonical range semantics are substantially specified.
 - **#950:** Blocked until an approved production mapping from SCEP payload exists; unavailable-coordinate handling can proceed independently.
