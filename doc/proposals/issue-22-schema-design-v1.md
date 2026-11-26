@@ -336,15 +336,17 @@ message CanonicalTextIdentity {
   string normalization_version = 9;
   string projection_contract_id = 10;
   string projection_contract_version = 11;
+  LineEndingPolicy line_endings = 12;
+  TextNormalization normalization = 13;
 }
 ```
 
 Hash rule:
 
-1. Decode source text using declared encoding.
-2. Apply Unicode normalization profile.
-3. Apply line-ending policy.
-4. Encode using declared canonical encoding.
+1. Decode source text using the declared encoding.
+2. Apply the identity's Unicode normalization policy.
+3. Apply the identity's line-ending policy.
+4. Encode using the declared canonical encoding.
 5. SHA-256 the complete bytes.
 
 BOM bytes are excluded. Offsets are into the normalized text in `unit`; digest encoding is separate. Any source/execution/normalization/projection/encoding change creates a new canonical identity.
@@ -356,6 +358,9 @@ Canonical identity integrity:
 - `canonical_text_digest` must identify the exact canonical bytes produced under the declared encoding, normalization profile, line-ending policy, and projection contract/version.
 - A canonical range without a matching identity is invalid.
 - A stale identity after source/execution/normalization/projection/encoding change remains unavailable; it must not be reused.
+- `CanonicalTextRange.line_endings` must equal `CanonicalTextIdentity.line_endings`.
+- `CanonicalTextRange.normalization` must equal `CanonicalTextIdentity.normalization`.
+- The identity's normalization/line-ending values are immutable parts of that canonical text revision; differing range values make the range invalid.
 
 ## 4. Execution provenance
 
@@ -446,8 +451,8 @@ Presence rule: `completeness`/`confidence` use proto3 presence. Unset means unkn
 
 `NONE_KNOWN` is a candidate value, not an approved default.
 
-**Decision status:** awaiting explicit schema approval.  
-**Recommendation:** Approve, because known absence is semantically distinct from unavailable provenance and avoids overloading `UNKNOWN`.
+**Decision status:** proposed decision recorded as **Approve**, pending the schema-design approval.  
+**Rationale:** known absence is semantically distinct from unavailable provenance and avoids overloading `UNKNOWN`.
 
 Choose one:
 
@@ -539,6 +544,8 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 | PDF page_number > 0 with no bbox but precision not UNAVAILABLE | Invalid |
 | Canonical source/execution reference mismatch | Invalid |
 | Canonical digest/identity mismatch | Invalid/unavailable |
+| Canonical range line endings differ from identity | Invalid |
+| Canonical range normalization differs from identity | Invalid |
 | Quality completeness/confidence unset | Unknown; not 0.0 |
 | Multiple source locations | All retained independently |
 | PDF text range without text layer | Invalid/unavailable |
@@ -565,6 +572,8 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 - Source binding inheritance/mismatch/stale source.
 - Canonical identity changes on source, execution, normalization, projection, encoding.
 - Canonical identity rejects mismatched source document/digest/version or unresolved execution.
+- Canonical range line-ending and normalization policy must match identity.
+- Identity line-ending/normalization changes create a new canonical identity.
 - TextRange rejects negative, reversed, or unspecified semantics.
 - Execution ID uniqueness, parent resolution, cycles, attribution states, merge ancestry.
 - Projection lossless/lossy/unsupported outcomes.
@@ -575,7 +584,7 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 This schema design is ready for review only if:
 
 - Field numbers and enum values are accepted.
-- `NONE_KNOWN` decision is explicitly recorded as **Approve** or **Defer** using section 4.3 (current recommendation: Approve).
+- `NONE_KNOWN` decision in section 4.3 is confirmed as **Approve** or changed to **Defer**. The current proposed decision is Approve.
 - `execution_ids` direct-production/set semantics are accepted.
 - Validation rules are accepted as normative.
 - `FormatReference` and `QualityReport` definitions are accepted, including optional presence semantics.
