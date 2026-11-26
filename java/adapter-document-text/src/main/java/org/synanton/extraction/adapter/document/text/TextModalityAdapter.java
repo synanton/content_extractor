@@ -177,7 +177,7 @@ public class TextModalityAdapter implements ModalityAdapter {
                 int endByte = line.contentEndByte();
                 StringBuilder code = new StringBuilder();
                 i++;
-                while (i < lines.size() && !lines.get(i).text().strip().startsWith(fenceMarker)) {
+                while (i < lines.size() && !isClosingFence(lines.get(i).text(), fenceMarker)) {
                     if (!code.isEmpty()) code.append('\n');
                     code.append(lines.get(i).text());
                     endByte = lines.get(i).contentEndByte();
@@ -291,6 +291,18 @@ public class TextModalityAdapter implements ModalityAdapter {
                 List.of(sourceSpan(listId, listStartByte, listEndByte))));
         elements.addAll(items);
         return i;
+    }
+
+    private static boolean isClosingFence(String line, String openingFence) {
+        String stripped = line.strip();
+        if (stripped.isEmpty() || stripped.charAt(0) != openingFence.charAt(0)) {
+            return false;
+        }
+        int run = 0;
+        while (run < stripped.length() && stripped.charAt(run) == openingFence.charAt(0)) {
+            run++;
+        }
+        return run >= openingFence.length() && stripped.substring(run).isBlank();
     }
 
     private static SourceSpan sourceSpan(String elementId, int startByte, int endByte) {

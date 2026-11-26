@@ -346,6 +346,21 @@ class TextModalityAdapterTest {
         assertRaw(b, withoutTerminator, ElementType.PARAGRAPH, "one\ntwo");
     }
 
+    @Test
+    void shouldNotTreatMarkerPrefixedCodeLineAsClosingFence() throws Exception {
+        String content = "```\n```not-a-closing-fence\ncode\n```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement code = element(result, ElementType.CODE_BLOCK);
+        assertThat(code.text()).isEqualTo("```not-a-closing-fence\ncode");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK,
+                "```\n```not-a-closing-fence\ncode\n```");
+    }
+
     private static void assertRaw(AdapterResult result, byte[] bytes, ElementType type, String expected) {
         NormalizedElement element = element(result, type);
         assertThat(element.sourceSpans()).hasSize(1);
