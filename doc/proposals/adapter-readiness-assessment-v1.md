@@ -107,7 +107,7 @@ A field may be marked adapter-available only when the required evidence exists.
 
 ### 3.3 Source text range
 
-- Markdown/text: start/end are half-open UTF-8 offsets into the original bytes; slicing reproduces the normalized element text under the declared normalization policy.
+- Markdown/text: start/end are half-open UTF-8 offsets into the original bytes. Slicing returns the exact raw source span, including Markdown markers, delimiters, and original line endings. It does not necessarily equal the parser's normalized element text. Any transformation from raw slice to parser text, canonical text, or `flattenedText` must be explicit and separately tested.
 - PDF: requires a `TextLayerIdentity` with text-layer digest, encoding, origin source digest/version, and derivation execution.
 - No range is derived by searching flattened text.
 - An unavailable range remains absent/unavailable.
@@ -170,6 +170,22 @@ The Markdown slice must demonstrate useful partial population:
 - Consumers must handle this partial payload without inferring missing evidence or treating absent fields as zero/exact.
 - The implementation proposal must state which fields are emitted in the first slice and which remain unavailable.
 
+### Minimum slice versus optional evidence
+
+**Minimum evidence slice:**
+
+- Immutable source identity/digest.
+- Parser-produced structural elements.
+- Verified original-byte ranges tied to the source.
+
+**Optional evidence capabilities:**
+
+- Canonical text identity.
+- Execution attribution.
+- Projection records and loss reports.
+
+Optional capabilities are populated only when their contracts can be satisfied and verified. The minimum slice must not fabricate canonical/execution/projection completeness merely to satisfy a checklist.
+
 ### Recommendation: Markdown first
 
 Use the existing Markdown adapter as the first end-to-end evidence vertical slice.
@@ -182,14 +198,17 @@ Why:
 - It avoids conflating PDF text-layer uncertainty with evidence-contract plumbing.
 - Failures are attributable to adapter logic rather than PDF coordinate systems.
 
-Scope of the vertical slice:
+Minimum vertical-slice scope:
 
 1. Assign document identity/source descriptor.
 2. Emit exact original-source UTF-8 ranges for headings, paragraphs, list items, and code blocks.
-3. Build a canonical text identity with reproducible normalization/digest.
-4. Record one execution and explicit attribution.
-5. Emit a loss-aware text/Markdown projection if applicable.
-6. Validate old consumers still handle absent/new optional fields safely.
+3. Validate old consumers still handle absent/new optional fields safely.
+
+Optional additions, only if independently reproducible and tested:
+
+4. Canonical text identity.
+5. Execution attribution.
+6. Loss-aware projection records.
 
 ### PDF second
 
@@ -225,10 +244,10 @@ Current status: schema-level tests exist; production consumer tests for these be
 
 - Source fingerprint and original bytes are available to the adapter.
 - Exact UTF-8 source ranges can be computed from parser line/offset tracking.
-- Canonical identity can be reproduced from a declared normalization/profile contract.
-- Execution provenance can be assigned by the gateway/adapter boundary.
-- An evidence test can compare every emitted range to the original bytes.
+- An evidence test can compare every emitted original-byte range to the raw source slice.
 - Platform consumer tests prove absent optional fields are handled safely.
+- Any canonical identity is reproducible from a declared normalization/profile contract.
+- Any execution provenance resolves at the gateway/adapter boundary.
 
 ### No-go conditions
 
@@ -245,10 +264,11 @@ Current status: schema-level tests exist; production consumer tests for these be
 
 Deliverables for that milestone:
 
-1. Markdown adapter populates source descriptor, exact source ranges, canonical identity, execution attribution, and a projection.
-2. Evidence tests validate original-byte correspondence.
+1. Markdown adapter populates source descriptor, structure, and exact original-source ranges.
+2. Evidence tests validate raw-byte correspondence.
 3. Consumer compatibility tests validate absent optional data.
-4. No PDF, migration, benchmark, or baseline changes.
+4. Canonical identity, execution attribution, and projections are added only as separately verified optional capabilities.
+5. No PDF, migration, benchmark, or baseline changes.
 
 PDF parity remains frozen until the Markdown slice establishes the evidence pipeline.
 
