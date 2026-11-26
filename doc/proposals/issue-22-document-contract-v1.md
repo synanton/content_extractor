@@ -829,7 +829,7 @@ The repeated collection is required here: a single oneof alternative would lose 
       "location_id": "loc-text",
       "source_binding": {"kind": "DERIVED_REPRESENTATION", "origin_document_id": "doc-1", "origin_source_digest": "sha256:abc...", "origin_source_version": "v1"},
       "precision": "EXACT",
-      "reproducibility": "EXACT_FROM_SOURCE",
+      "reproducibility": "DEPENDS_ON_PARSER",
       "text_range": {
         "unit": "UTF8_BYTE",
         "coordinate_space": "SOURCE_TEXT_LAYER",
@@ -852,6 +852,8 @@ The repeated collection is required here: a single oneof alternative would lose 
   ]
 }
 ```
+
+Here the range is exact within the materialized text layer, but reproducing that layer depends on the extractor/parser. `DEPENDS_ON_PARSER` is therefore the correct reproducibility state unless the contract explicitly defines reproducibility as byte-for-byte stability within an already materialized layer.
 
 ### 7.6 Legacy payload conversion
 
@@ -964,13 +966,14 @@ Projection records use `ProjectionOutcome`:
 
 ### #22 — contract design
 
-**Ready for final design decisions, not schema implementation approval.**
+**Ready for final design approval, not schema implementation approval.**
 
+- No architectural blocker remains in the proposal.
 - The original exclusive-location blocker is resolved.
-- PDF text layers are now a defined prerequisite rather than an implicit range.
+- PDF text layers are a defined prerequisite rather than an implicit range.
 - Origin versus derived representation identity is explicit.
 - Canonical hashing, execution-graph integrity, execution attribution, precision validation, and projection contracts are specified.
-- Remaining decisions are recorded in section 11 and require approval before schema implementation.
+- Remaining field/enum approvals and narrow policy choices are recorded in section 11.
 
 ### #20 / #21 — adapter capabilities
 
@@ -1013,8 +1016,8 @@ The following defaults are proposed for approval; they are not yet normative.
 | Canonical unit | UTF-16 code units for legacy Platform canonical ranges; all units explicit; no silent conversion | Whether multiple canonical units may coexist |
 | Legacy PDF precision | Geometry may be exact in its coordinate system; historical evidence precision is `APPROXIMATE`; no source text range inferred | Validation rule for old payloads |
 | PDF text ranges | `SOURCE_TEXT_LAYER` + `TextLayerIdentity`; origin and derived representation identities are distinct | Approve extraction-layer identity semantics |
-| Canonical hashing | Decode -> normalize -> line endings -> encode -> SHA-256; BOM excluded universally | Approve encoding profile |
-| Source binding | `INHERIT_DOCUMENT` / `EXPLICIT_ORIGIN` / `DERIVED_REPRESENTATION`; origin identity and derived representation identity are separate | Approve derived-identity linking rules |
+| Canonical hashing | Decode -> normalize -> line endings -> encode -> SHA-256; BOM exclusion is decided and applied universally | Approve supported encoding profile/versioning |
+| Source binding | `INHERIT_DOCUMENT` / `EXPLICIT_ORIGIN` / `DERIVED_REPRESENTATION`; origin and derived representation identities are separate (resolved) | Approve exact linking/versioning policy for derived representations |
 | Element types | Add `DOCUMENT`, `SECTION`, `FIGURE`, `UNKNOWN`; retain table row/cell types | Whether `DOCUMENT` is an element or root metadata |
 | Table cells | Cell-level elements and optional source locations | Whether cell spans need dedicated fields |
 | Schema version | Separate wire compatibility from semantic capability version | Exact versioning policy |
@@ -1029,16 +1032,17 @@ The following defaults are proposed for approval; they are not yet normative.
 Remaining approval items:
 
 1. Approve `TextLayerIdentity` and extraction-layer versioning for PDF text ranges.
-2. Approve the canonical hash encoding/BOM profile as specified.
+2. Approve the supported canonical encoding profile/versioning. BOM exclusion is already decided.
 3. Approve `ExecutionAttribution` field/enum semantics.
 4. Decide whether `DOCUMENT` is an element or only root metadata.
-5. Define table cell-span/versioning requirements.
-6. Decide whether audio/video transcripts use the document class or remain modality payloads.
-7. Decide whether merged elements need a dedicated merge record in addition to repeated execution IDs.
+5. Approve the derived-representation linking/versioning policy; the origin/representation separation itself is resolved.
+6. Define table cell-span/versioning requirements.
+7. Decide whether audio/video transcripts use the document class or remain modality payloads.
+8. Decide whether merged elements need a dedicated merge record in addition to repeated execution IDs.
 
 ## 12. Readiness conclusion
 
-- **Contract design:** Ready for final design decisions. This is not schema implementation approval.
+- **Contract design:** Ready for final design approval. This is not schema implementation approval.
 - **#20:** Conditional; PDF text-range parity requires approval of `SOURCE_TEXT_LAYER`/`TextLayerIdentity`.
 - **#21:** Conditional; Markdown structure and source/canonical range semantics are substantially specified.
 - **#950:** Blocked until an approved production mapping from SCEP payload exists; unavailable-coordinate handling can proceed independently.
