@@ -7,6 +7,7 @@ import org.synanton.extraction.spi.model.ExtractionOptions;
 import org.synanton.extraction.spi.model.ExtractionRequest;
 import org.synanton.extraction.spi.model.ElementType;
 import org.synanton.extraction.spi.model.NormalizedElement;
+import org.synanton.extraction.spi.model.SourceSpan;
 import org.synanton.extraction.spi.model.FeatureOutcome;
 import org.synanton.extraction.spi.model.ObjectRef;
 
@@ -217,6 +218,204 @@ class TextModalityAdapterTest {
         assertThat(result.document().metadata())
                 .containsEntry("Author", "Ada")
                 .containsEntry("Edition", "2");
+    }
+
+    @Test
+    void shouldEmitRawMarkdownSourceRanges() throws Exception {
+        String content = "# Title\nBody with **bold**.\n\n- item\n  - nested\n\n```js\nconst x = 1;\n```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.document().source()).isNotNull();
+        assertThat(result.document().source().sourceFormat()).isEqualTo("markdown");
+        assertThat(result.document().source().sourceDigest()).isEqualTo("a".repeat(64));
+
+        assertRaw(result, bytes, ElementType.HEADING, "# Title");
+        assertRaw(result, bytes, ElementType.PARAGRAPH, "Body with **bold**.");
+        assertRaw(result, bytes, ElementType.LIST, "- item\n  - nested");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK, "```js\nconst x = 1;\n```");
+    }
+
+    @Test
+    void shouldPreserveCrlfBytesWhileNormalizingParserText() throws Exception {
+        String content = "# Title\r\nBody\r\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement heading = element(result, ElementType.HEADING);
+        assertThat(heading.text()).isEqualTo("Title");
+        SourceSpan span = heading.sourceSpans().getFirst();
+        assertThat(new String(bytes, (int) span.startByte(), (int) (span.endByte() - span.startByte()),
+                StandardCharsets.UTF_8)).isEqualTo("# Title");
+    }
+
+    @Test
+    void shouldKeepSupplementaryUnicodeRangesStable() throws Exception {
+        String content = "# 😀 Distributed Systems\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.HEADING, "# 😀 Distributed Systems");
+    }
+
+    @Test
+    void shouldFailClosedOnMalformedUtf8() throws Exception {
+        byte[] malformed = new byte[]{'#', ' ', (byte) 0xC3, (byte) 0x28};
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(malformed));
+
+        assertThat(result.isSuccess()).isFalse();
+    }
+
+    @Test
+    void shouldRejectMarkdownWithoutSourceIdentity() throws Exception {
+        ExtractionRequest noSource = new ExtractionRequest(
+                "op-1", "tenant1", "key1", "ref1", null, "text/markdown",
+                ExtractionOptions.defaults(), "PRIORITY_NORMAL", null);
+
+        AdapterResult result = ADAPTER.extract(noSource, streamOf("# Title"));
+
+        assertThat(result.isSuccess()).isFalse();
+    }
+
+    @Test
+    void shouldPreserveBomInRawRangeAndStripItFromParserTextAndMetadata() throws Exception {
+        String content = "\uFEFF# Title\nBody\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement heading = element(result, ElementType.HEADING);
+        assertThat(heading.text()).isEqualTo("Title");
+        SourceSpan span = heading.sourceSpans().getFirst();
+        assertThat(span.startByte()).isZero();
+        assertThat(new String(bytes, (int) span.startByte(),
+                (int) (span.endByte() - span.startByte()), StandardCharsets.UTF_8))
+                .isEqualTo("\uFEFF# Title");
+    }
+
+    @Test
+    void shouldHandleMultiLineParagraphAndCodeBlockCrlfRanges() throws Exception {
+        String content = "Line one\r\nLine two\r\n\r\n```\r\ncode one\r\ncode two\r\n```\r\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.PARAGRAPH, "Line one\r\nLine two");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK,
+                "```\r\ncode one\r\ncode two\r\n```");
+    }
+
+    @Test
+    void shouldHandleLoneCrAndMixedLineEndings() throws Exception {
+        String content = "# Title\r\r- one\n  - two\r\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.HEADING, "# Title");
+        assertRaw(result, bytes, ElementType.LIST, "- one\n  - two");
+    }
+
+    @Test
+    void shouldExcludeFinalLineTerminatorButKeepInternalTerminators() throws Exception {
+        String content = "one\ntwo\n";
+        byte[] withTerminator = content.getBytes(StandardCharsets.UTF_8);
+        byte[] withoutTerminator = "one\ntwo".getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult a = ADAPTER.extract(requestFor("text/markdown"), new ByteArrayInputStream(withTerminator));
+        AdapterResult b = ADAPTER.extract(requestFor("text/markdown"), new ByteArrayInputStream(withoutTerminator));
+
+        assertRaw(a, withTerminator, ElementType.PARAGRAPH, "one\ntwo");
+        assertRaw(b, withoutTerminator, ElementType.PARAGRAPH, "one\ntwo");
+    }
+
+    @Test
+    void shouldNotTreatMarkerPrefixedCodeLineAsClosingFence() throws Exception {
+        String content = "```\n```not-a-closing-fence\ncode\n```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement code = element(result, ElementType.CODE_BLOCK);
+        assertThat(code.text()).isEqualTo("```not-a-closing-fence\ncode");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK,
+                "```\n```not-a-closing-fence\ncode\n```");
+    }
+
+    @Test
+    void shouldNotTreatFourSpaceIndentedFenceAsClosingFence() throws Exception {
+        String content = "```\n    ```\ncode\n```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement code = element(result, ElementType.CODE_BLOCK);
+        assertThat(code.text()).isEqualTo("    ```\ncode");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK,
+                "```\n    ```\ncode\n```");
+    }
+
+    @Test
+    void shouldAcceptThreeSpaceIndentedClosingFence() throws Exception {
+        String content = "```\ncode\n   ```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.CODE_BLOCK, "```\ncode\n   ```");
+    }
+
+    @Test
+    void shouldPreserveLeadingBlankLinesInCodeBlockText() throws Exception {
+        String content = "```\n\n\nfirst line\n```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement code = element(result, ElementType.CODE_BLOCK);
+        assertThat(code.text()).isEqualTo("\n\nfirst line");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK, "```\n\n\nfirst line\n```");
+    }
+
+    private static void assertRaw(AdapterResult result, byte[] bytes, ElementType type, String expected) {
+        NormalizedElement element = element(result, type);
+        assertThat(element.sourceSpans()).hasSize(1);
+        SourceSpan span = element.sourceSpans().getFirst();
+        String actual = new String(bytes, (int) span.startByte(),
+                (int) (span.endByte() - span.startByte()), StandardCharsets.UTF_8);
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    private static NormalizedElement element(AdapterResult result, ElementType type) {
+        return result.document().elements().stream()
+                .filter(element -> element.type() == type)
+                .findFirst()
+                .orElseThrow();
     }
 
     @Test

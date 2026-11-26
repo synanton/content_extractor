@@ -11,13 +11,18 @@ import org.synanton.extraction.spi.model.ExtractionOptions;
 import org.synanton.extraction.spi.model.FeatureOutcome;
 import org.synanton.extraction.spi.model.NormalizedDocument;
 import org.synanton.extraction.spi.model.NormalizedElement;
+import org.synanton.extraction.spi.model.NormalizedSourceDescriptor;
 import org.synanton.extraction.spi.model.ObjectRef;
+import org.synanton.extraction.spi.model.SourceSpan;
+import org.synanton.extraction.v1.BindingKind;
 import org.synanton.extraction.v1.BoundingBox;
 import org.synanton.extraction.v1.ContentProvenance;
+import org.synanton.extraction.v1.CoordinateSpace;
 import org.synanton.extraction.v1.DocumentElement;
 import org.synanton.extraction.v1.DocumentElementType;
 import org.synanton.extraction.v1.DocumentPayload;
 import org.synanton.extraction.v1.ElementLocation;
+import org.synanton.extraction.v1.LineEndingPolicy;
 import org.synanton.extraction.v1.ExtractionError;
 import org.synanton.extraction.v1.ExtractionErrorCatalogue;
 import org.synanton.extraction.v1.ExtractionErrorCode;
@@ -25,12 +30,20 @@ import org.synanton.extraction.v1.ExtractionResult;
 import org.synanton.extraction.v1.ExtractionStatus;
 import org.synanton.extraction.v1.FeatureState;
 import org.synanton.extraction.v1.ObjectReference;
+import org.synanton.extraction.v1.LocationPrecision;
+import org.synanton.extraction.v1.OffsetUnit;
 import org.synanton.extraction.v1.PayloadDescriptor;
+import org.synanton.extraction.v1.Reproducibility;
 import org.synanton.extraction.v1.ResourceUsage;
 import org.synanton.extraction.v1.ResultProvenance;
 import org.synanton.extraction.v1.SerializationFormat;
+import org.synanton.extraction.v1.SourceBinding;
+import org.synanton.extraction.v1.SourceDescriptor;
+import org.synanton.extraction.v1.SourceLocation;
 import org.synanton.extraction.v1.StructuredPayload;
 import org.synanton.extraction.v1.SubmitExtractionRequest;
+import org.synanton.extraction.v1.TextNormalization;
+import org.synanton.extraction.v1.TextRange;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -179,10 +192,25 @@ final class ResultMapper {
     }
 
     static DocumentPayload toDocumentPayload(NormalizedDocument document) {
+        if (document.source() == null
+                && document.elements().stream().anyMatch(el -> !el.sourceSpans().isEmpty())) {
+            throw new IllegalArgumentException(
+                    "source locations require an immutable document source identity");
+        }
         DocumentPayload.Builder builder = DocumentPayload.newBuilder()
                 .setMediaType(nvl(document.mediaType()))
                 .setFlattenedText(nvl(document.flattenedText()));
         document.metadata().forEach(builder::putMetadata);
+        NormalizedSourceDescriptor source = document.source();
+        if (source != null) {
+            builder.setSource(SourceDescriptor.newBuilder()
+                    .setMediaType(nvl(source.mediaType()))
+                    .setSourceFormat(nvl(source.sourceFormat()))
+                    .setSourceDigest(nvl(source.sourceDigest()))
+                    .setSourceVersion(nvl(source.sourceVersion()))
+                    .setFilename(nvl(source.filename()))
+                    .build());
+        }
         for (NormalizedElement el : document.elements()) {
             builder.addElements(toElement(el));
         }
@@ -213,7 +241,25 @@ final class ResultMapper {
                             .build())
                     .build());
         }
+        el.sourceSpans().forEach(span -> b.addSourceLocations(toSourceLocation(span)));
         return b.build();
+    }
+
+    private static SourceLocation toSourceLocation(SourceSpan span) {
+        return SourceLocation.newBuilder()
+                .setLocationId(span.locationId())
+                .setSourceBinding(SourceBinding.newBuilder()
+                        .setKind(BindingKind.BINDING_KIND_INHERIT_DOCUMENT))
+                .setPrecision(LocationPrecision.LOCATION_PRECISION_EXACT)
+                .setReproducibility(Reproducibility.REPRODUCIBILITY_EXACT_FROM_SOURCE)
+                .setTextRange(TextRange.newBuilder()
+                        .setUnit(OffsetUnit.OFFSET_UNIT_UTF8_BYTE)
+                        .setCoordinateSpace(CoordinateSpace.COORDINATE_SPACE_ORIGINAL_SOURCE)
+                        .setStart(span.startByte())
+                        .setEnd(span.endByte())
+                        .setNormalization(TextNormalization.TEXT_NORMALIZATION_NONE)
+                        .setLineEndings(LineEndingPolicy.LINE_ENDING_ORIGINAL))
+                .build();
     }
 
     private static ExtractionStatus toStatus(SyncExtractionOutcome.OutcomeStatus status) {
