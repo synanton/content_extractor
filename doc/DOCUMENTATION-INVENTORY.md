@@ -7,7 +7,9 @@ platform integration references.
 
 | Document | Classification | Disposition / action |
 |---|---|---|
-| [`../README.md`](../README.md) | Current / repository entry point | Added supported media types and explicit unsupported modality status; distinguished component capabilities from the accepted Phase 1 end-to-end path. |
+| [`../README.md`](../README.md) | Current / repository entry point | Added supported media types and explicit unsupported modality status; distinguishes implemented #22 schema from adapter-exercised behavior. |
+| `doc/proposals/issue-22-document-contract-v1.md` | Approved contract design | Conceptual document evidence contract; schema implementation is tracked separately. |
+| `doc/proposals/issue-22-schema-design-v1.md` | Approved schema design | Field/enum allocation and validation rules; implementation landed in `java/extraction-contract` and Platform mirror. |
 | [`README.md`](README.md) | Current / navigation | Added as the documentation entry point and linked current architecture, code status, and historical proposals. |
 | [`Synanton_v1.21_structured_content_extraction.md`](Synanton_v1.21_structured_content_extraction.md) | Useful historical proposal / superseded | Preserved design rationale; added superseded notice pointing to Platform Architecture 1.0 and Design 1.22 Part IX. Its generic requirements are not current implementation claims. |
 | [`Synanton_v1.21_multimodal_extraction_model.md`](Synanton_v1.21_multimodal_extraction_model.md) | Useful historical proposal / superseded | Preserved multimodal design history; explicitly states audio/image/video remain unsupported adapter stubs. |
