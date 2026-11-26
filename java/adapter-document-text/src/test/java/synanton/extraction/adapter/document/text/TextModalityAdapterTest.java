@@ -5,12 +5,15 @@ import org.synanton.extraction.adapter.document.text.TextModalityAdapter;
 import org.synanton.extraction.spi.model.AdapterResult;
 import org.synanton.extraction.spi.model.ExtractionOptions;
 import org.synanton.extraction.spi.model.ExtractionRequest;
+import org.synanton.extraction.spi.model.ElementType;
+import org.synanton.extraction.spi.model.NormalizedElement;
 import org.synanton.extraction.spi.model.FeatureOutcome;
 import org.synanton.extraction.spi.model.ObjectRef;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -124,6 +127,96 @@ class TextModalityAdapterTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.featureStates()).containsEntry("ocr", FeatureOutcome.NOT_APPLICABLE);
+    }
+
+    @Test
+    void shouldPreserveMarkdownHeadingsParagraphsAndCode() throws Exception {
+        String content = """
+                # Guide
+                Intro paragraph.
+
+                ## Install
+                Run this:
+
+                ```bash
+                docker compose up
+                ```
+                """;
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        List<NormalizedElement> elements = result.document().elements();
+        assertThat(elements).extracting(NormalizedElement::type)
+                .containsExactly(ElementType.HEADING, ElementType.PARAGRAPH,
+                        ElementType.HEADING, ElementType.PARAGRAPH, ElementType.CODE_BLOCK);
+        assertThat(elements.get(0).level()).isEqualTo(1);
+        assertThat(elements.get(2).level()).isEqualTo(2);
+        assertThat(elements.get(4).text()).isEqualTo("docker compose up");
+        assertThat(elements.get(4).attributes()).containsEntry("language", "bash");
+    }
+
+    @Test
+    void shouldPreserveMarkdownNestedListsAndParentChildIds() throws Exception {
+        String content = """
+                - alpha
+                  - beta
+                  - gamma
+                - delta
+                """;
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        List<NormalizedElement> elements = result.document().elements();
+        assertThat(elements).extracting(NormalizedElement::type)
+                .containsExactly(ElementType.LIST, ElementType.LIST_ITEM,
+                        ElementType.LIST_ITEM, ElementType.LIST_ITEM, ElementType.LIST_ITEM);
+        NormalizedElement list = elements.get(0);
+        assertThat(list.childIds()).containsExactly("e2", "e5");
+        NormalizedElement beta = elements.get(2);
+        assertThat(beta.level()).isEqualTo(2);
+        assertThat(beta.id()).isEqualTo("e3");
+        assertThat(elements.get(1).childIds()).containsExactly("e3", "e4");
+    }
+
+    @Test
+    void shouldKeepMarkdownCommentsAndFrontMatterOutOfStructuralContent() throws Exception {
+        String content = """
+                ---
+                title: hidden metadata
+                ---
+                # Visible
+                <!-- Author: hidden -->
+                Body text.
+                """;
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.document().elements()).extracting(NormalizedElement::text)
+                .containsExactly("Visible", "Body text.");
+    }
+
+    @Test
+    void shouldKeepBoldPreambleMetadataOutOfStructuralContent() throws Exception {
+        String content = """
+                # Book
+                **Author:** Ada
+                **Edition:** 2
+                <!-- Document ID: hidden -->
+                ## Preface
+                Body.
+                """;
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.document().elements()).extracting(NormalizedElement::text)
+                .containsExactly("Book", "Preface", "Body.");
+        assertThat(result.document().metadata())
+                .containsEntry("Author", "Ada")
+                .containsEntry("Edition", "2");
     }
 
     @Test
