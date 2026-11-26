@@ -134,6 +134,42 @@ A field may be marked adapter-available only when the required evidence exists.
 
 ## 4. Representative adapter selection
 
+### Markdown evidence layers
+
+The Markdown vertical slice must keep four layers distinct:
+
+1. **Original source bytes** — immutable bytes, digest, version, and identity.
+2. **Parser-produced structure** — element text and hierarchy emitted by the Markdown parser.
+3. **Canonical projection** — normalized text and its identity/digest, if produced.
+4. **Source ranges** — half-open ranges into the original Markdown bytes.
+
+The following transformations can move offsets:
+
+- CRLF/CR to LF normalization
+- Unicode NFC/NFKC normalization
+- HTML entity decoding
+- trimming, whitespace collapsing, or indentation stripping
+- fenced-code or list marker removal
+
+A successful parse or stable normalized text is not evidence of exact source correspondence.
+
+Markdown evidence tests must:
+
+- Slice original bytes using the emitted source range and compare the result against the parser's declared source text before normalization.
+- Keep source ranges independent from canonical ranges.
+- Recompute the canonical digest under the declared normalization/projection contract.
+- Reject ranges that cannot be tied to the original bytes.
+- Avoid deriving ranges by searching parsed text or `flattenedText`.
+
+### Partial-data requirement
+
+The Markdown slice must demonstrate useful partial population:
+
+- Structural elements and exact original-source ranges may be emitted.
+- Canonical identity, execution attribution, and projections may remain `UNAVAILABLE`/absent if not reproducible.
+- Consumers must handle this partial payload without inferring missing evidence or treating absent fields as zero/exact.
+- The implementation proposal must state which fields are emitted in the first slice and which remain unavailable.
+
 ### Recommendation: Markdown first
 
 Use the existing Markdown adapter as the first end-to-end evidence vertical slice.
