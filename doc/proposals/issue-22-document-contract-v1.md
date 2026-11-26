@@ -1015,7 +1015,7 @@ The following defaults are proposed for approval; they are not yet normative.
 |---|---|---|
 | Canonical unit | UTF-16 code units for legacy Platform canonical ranges; all units explicit; no silent conversion | Whether multiple canonical units may coexist |
 | Legacy PDF precision | Geometry may be exact in its coordinate system; historical evidence precision is `APPROXIMATE`; no source text range inferred | Validation rule for old payloads |
-| PDF text ranges | `SOURCE_TEXT_LAYER` + `TextLayerIdentity`; origin and derived representation identities are distinct | Approve extraction-layer identity semantics |
+| PDF text ranges | `SOURCE_TEXT_LAYER` + `TextLayerIdentity`; origin and derived representation identities are distinct | Approve extraction-layer identity linking and versioning policy |
 | Canonical hashing | Decode -> normalize -> line endings -> encode -> SHA-256; BOM exclusion is decided and applied universally | Approve supported encoding profile/versioning |
 | Source binding | `INHERIT_DOCUMENT` / `EXPLICIT_ORIGIN` / `DERIVED_REPRESENTATION`; origin and derived representation identities are separate (resolved) | Approve exact linking/versioning policy for derived representations |
 | Element types | Add `DOCUMENT`, `SECTION`, `FIGURE`, `UNKNOWN`; retain table row/cell types | Whether `DOCUMENT` is an element or root metadata |
