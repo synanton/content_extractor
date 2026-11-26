@@ -362,6 +362,15 @@ Canonical identity integrity:
 - `CanonicalTextRange.normalization` must equal `CanonicalTextIdentity.normalization`.
 - The identity's normalization/line-ending values are immutable parts of that canonical text revision; differing range values make the range invalid.
 
+Normalization profile/version relationship:
+
+- `TEXT_NORMALIZATION_UNSPECIFIED` is invalid in a canonical identity.
+- `NONE`: no Unicode transformation. `normalization_profile`/`normalization_version` must be empty or explicitly `"none"`; they must not imply a transformation.
+- `NFC` / `NFKC`: the enum defines the standard Unicode operation. The profile must be empty, `"unicode"`, or a standard-profile identifier; the version must identify the Unicode version used when available. The metadata must not describe a custom transformation.
+- `CUSTOM`: `normalization_profile` and `normalization_version` are required and must define the exact transformation sufficiently to reproduce the digest. Implementations must not apply an undocumented custom rule.
+- `normalization_profile`/`normalization_version` must never contradict the enum value.
+- The identity comprises enum + profile + version. Two identities with the same enum but different profile/version are different canonical revisions.
+
 ## 4. Execution provenance
 
 ### 4.1 Field allocation
@@ -546,6 +555,9 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 | Canonical digest/identity mismatch | Invalid/unavailable |
 | Canonical range line endings differ from identity | Invalid |
 | Canonical range normalization differs from identity | Invalid |
+| `CUSTOM` normalization without profile/version | Invalid |
+| `NONE` normalization with a transforming profile | Invalid |
+| Same enum but different normalization profile/version | New canonical identity |
 | Quality completeness/confidence unset | Unknown; not 0.0 |
 | Multiple source locations | All retained independently |
 | PDF text range without text layer | Invalid/unavailable |
@@ -574,6 +586,8 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 - Canonical identity rejects mismatched source document/digest/version or unresolved execution.
 - Canonical range line-ending and normalization policy must match identity.
 - Identity line-ending/normalization changes create a new canonical identity.
+- `NONE`/`NFC`/`NFKC`/`CUSTOM` profile metadata matches the enum and is reproducible.
+- `CUSTOM` without profile/version is invalid; contradicting profile metadata is invalid.
 - TextRange rejects negative, reversed, or unspecified semantics.
 - Execution ID uniqueness, parent resolution, cycles, attribution states, merge ancestry.
 - Projection lossless/lossy/unsupported outcomes.
