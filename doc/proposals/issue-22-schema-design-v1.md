@@ -366,7 +366,7 @@ Normalization profile/version relationship:
 
 - `TEXT_NORMALIZATION_UNSPECIFIED` is invalid in a canonical identity.
 - `NONE`: no Unicode transformation. `normalization_profile`/`normalization_version` must be empty or explicitly `"none"`; they must not imply a transformation.
-- `NFC` / `NFKC`: the enum defines the standard Unicode operation. The profile must be empty, `"unicode"`, or a standard-profile identifier; `normalization_version` must record the exact Unicode version used. The metadata must not describe a custom transformation.
+- `NFC` / `NFKC`: the enum defines the standard Unicode operation. The profile must be empty or `"unicode"`; `normalization_version` must record the exact Unicode version used. The metadata must not describe a custom transformation. Other profile identifiers are invalid in v1; a future standard-profile registry requires a new schema decision.
 - No Unicode-version fallback is inferred. If the producer cannot determine or record the version, the canonical identity is unavailable.
 - `CUSTOM`: `normalization_profile` and `normalization_version` are required and must define the exact transformation sufficiently to reproduce the digest. Implementations must not apply an undocumented custom rule.
 - `normalization_profile`/`normalization_version` must never contradict the enum value.
@@ -560,6 +560,7 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 | `NONE` normalization with a transforming profile | Invalid |
 | Same enum but different normalization profile/version | New canonical identity |
 | NFC/NFKC identity without Unicode normalization version | Invalid/unavailable |
+| NFC/NFKC profile other than empty or `"unicode"` | Invalid |
 | Quality completeness/confidence unset | Unknown; not 0.0 |
 | Multiple source locations | All retained independently |
 | PDF text range without text layer | Invalid/unavailable |
@@ -591,6 +592,7 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 - `NONE`/`NFC`/`NFKC`/`CUSTOM` profile metadata matches the enum and is reproducible.
 - `CUSTOM` without profile/version is invalid; contradicting profile metadata is invalid.
 - NFC/NFKC without an explicit Unicode version is invalid/unavailable.
+- NFC/NFKC with any profile other than empty or `"unicode"` is invalid.
 - TextRange rejects negative, reversed, or unspecified semantics.
 - Execution ID uniqueness, parent resolution, cycles, attribution states, merge ancestry.
 - Projection lossless/lossy/unsupported outcomes.
