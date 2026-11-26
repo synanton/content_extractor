@@ -2,6 +2,7 @@
 
 **Status:** Review proposal. Non-normative. No protobuf or production behavior is changed here.  
 **Scope:** Content Extractor contract evolution for format-neutral documents and typed source locations.  
+**Revision:** Addresses the #23 review: multiple simultaneous location records, normative binding/precision rules, canonical identity, projection outcomes, and execution-provenance integrity.  
 **Related:** #20 (PDF parity), #21 (Markdown parity), #950 (production ownership transition), #947 (evidence compatibility).  
 **Guardrails:** No parser migration, benchmark execution, semantic model execution, frozen artifact changes, or issue restructuring in this proposal.
 
@@ -194,9 +195,30 @@ message ExtractionExecution {
   string stage_id = 6;              // e.g. "text", "ocr", "table-recovery"
   string policy_id = 7;             // routing policy, not a routing table
   string policy_version = 8;
-  repeated string parent_execution_ids = 9; // fallback/merge lineage
-  QualityReport quality = 10;
-  map<string, string> attributes = 11;
+  ExecutionOutcome outcome = 9;
+  repeated ExecutionLink parents = 10;
+  QualityReport quality = 11;
+  map<string, string> attributes = 12;
+}
+
+enum ExecutionOutcome {
+  EXECUTION_OUTCOME_UNSPECIFIED = 0;
+  EXECUTION_OUTCOME_SUCCEEDED = 1;  // produced usable output
+  EXECUTION_OUTCOME_PARTIAL = 2;    // produced some usable output
+  EXECUTION_OUTCOME_FAILED = 3;     // produced no usable output
+}
+
+message ExecutionLink {
+  string execution_id = 1;
+  ExecutionLinkKind kind = 2;
+}
+
+enum ExecutionLinkKind {
+  EXECUTION_LINK_UNSPECIFIED = 0;
+  EXECUTION_LINK_RETRY = 1;
+  EXECUTION_LINK_FALLBACK = 2;
+  EXECUTION_LINK_INPUT_DEPENDENCY = 3;
+  EXECUTION_LINK_MERGE = 4;
 }
 
 message QualityReport {
@@ -206,18 +228,21 @@ message QualityReport {
   repeated string warnings = 4;
 }
 
+// Quality describes the output; it is not the execution outcome.
 enum QualityStatus {
   QUALITY_STATUS_UNSPECIFIED = 0;
   QUALITY_STATUS_COMPLETE = 1;
   QUALITY_STATUS_DEGRADED = 2;
   QUALITY_STATUS_PARTIAL = 3;
-  QUALITY_STATUS_FAILED = 4;
+  QUALITY_STATUS_UNKNOWN = 4;
 }
 ```
 
 `PayloadDescriptor` remains the payload-level schema/processor descriptor. `ExtractionProvenance` is document-level and must not duplicate schema identity.
 
 ### 4.2 Element source/canonical locations
+
+An element may carry multiple source locations simultaneously. The model therefore uses a repeated collection of independently typed location records, not an exclusive oneof.
 
 ```proto
 message DocumentElement {
@@ -233,7 +258,7 @@ message DocumentElement {
   string alternate_representation = 9;
 
   // Proposed additive fields.
-  SourceLocation source_location = 10;
+  repeated SourceLocation source_locations = 10;
   CanonicalTextRange canonical_text_range = 11;
 
   // Execution(s) that produced this element. Empty inherits the document's
@@ -242,19 +267,20 @@ message DocumentElement {
 }
 ```
 
-`ElementLocation` remains valid for compatibility and continues to mean page/PDF bbox when present. New code should prefer `SourceLocation` for explicit semantics.
+`ElementLocation` remains valid for compatibility and continues to mean page/PDF bbox when present. New code should prefer `source_locations` for explicit semantics.
 
-### 4.3 Typed SourceLocation
+Source locations are independently typed records. A PDF paragraph may therefore carry both a `PdfGeometry` record and a `TextRange` record, each with its own precision, reproducibility, and source binding.
 
-`SourceLocation` is a typed union, not one universal offset object.
+Tables retain `TABLE`, `TABLE_ROW`, and `TABLE_CELL` elements. Each cell may carry its own source locations; table-level geometry must not be the only evidence for cell content.
+
+### 4.3 SourceLocation record
 
 ```proto
 message SourceLocation {
-  string document_id = 1;          // optional; inherits document identity if empty
-  string source_digest = 2;        // optional explicit binding
-  string source_version = 3;       // optional explicit binding
-  LocationPrecision precision = 4;
-  Reproducibility reproducibility = 5;
+  string location_id = 1;           // stable within element
+  SourceBinding source_binding = 2; // inheritance or explicit binding
+  LocationPrecision precision = 3;
+  Reproducibility reproducibility = 4;
 
   oneof location {
     TextRange text_range = 10;
@@ -263,15 +289,29 @@ message SourceLocation {
   }
 }
 
+message SourceBinding {
+  BindingKind kind = 1;
+  string document_id = 2;           // required for EXPLICIT/DERIVED
+  string source_digest = 3;         // immutable source digest
+  string source_version = 4;        // source version, if available
+}
+
+enum BindingKind {
+  BINDING_KIND_UNSPECIFIED = 0;     // invalid for a usable location
+  BINDING_KIND_INHERIT_DOCUMENT = 1;
+  BINDING_KIND_EXPLICIT = 2;
+  BINDING_KIND_DERIVED = 3;         // references a different/derived source
+}
+
 enum LocationPrecision {
-  LOCATION_PRECISION_UNSPECIFIED = 0; // treat as UNAVAILABLE, never EXACT
+  LOCATION_PRECISION_UNSPECIFIED = 0; // unusable; never EXACT
   LOCATION_PRECISION_EXACT = 1;
   LOCATION_PRECISION_APPROXIMATE = 2;
   LOCATION_PRECISION_UNAVAILABLE = 3;
 }
 
 enum Reproducibility {
-  REPRODUCIBILITY_UNSPECIFIED = 0;
+  REPRODUCIBILITY_UNSPECIFIED = 0;   // not proven reproducible
   REPRODUCIBILITY_EXACT_FROM_SOURCE = 1;
   REPRODUCIBILITY_DEPENDS_ON_PARSER = 2;
   REPRODUCIBILITY_DEPENDS_ON_NORMALIZATION = 3;
@@ -279,7 +319,15 @@ enum Reproducibility {
 }
 ```
 
-Invariant: a present `SourceLocation` is not automatically exact. `precision` and `reproducibility` are mandatory contract semantics; `UNSPECIFIED` must be treated as unavailable/unknown by consumers.
+The oneof is now safe because it is per record; multiple records are allowed on one element.
+
+Normative rules:
+
+1. Every location record resolves to a source identity. `INHERIT_DOCUMENT` resolves to the enclosing document's immutable source identity/version/digest. `EXPLICIT` must match it. `DERIVED` must identify its actual source.
+2. `BINDING_KIND_UNSPECIFIED`, `LOCATION_PRECISION_UNSPECIFIED`, and `REPRODUCIBILITY_UNSPECIFIED` are invalid for a usable location.
+3. Every variant declares its coordinate system and units. Missing required semantics make the record invalid or `UNAVAILABLE`, never exact.
+4. A structurally present record is not automatically usable. Usable requires valid binding, explicit coordinate semantics, and `EXACT` or `APPROXIMATE` precision.
+5. A stale digest/version mismatch invalidates the location; it must not be silently reused against a replaced source.
 
 ### 4.4 Text ranges
 
@@ -294,20 +342,20 @@ message TextRange {
 }
 
 enum OffsetUnit {
-  OFFSET_UNIT_UNSPECIFIED = 0;
+  OFFSET_UNIT_UNSPECIFIED = 0;     // invalid for a usable range
   OFFSET_UNIT_UTF8_BYTE = 1;
   OFFSET_UNIT_UTF16_CODE_UNIT = 2;
   OFFSET_UNIT_UNICODE_CODE_POINT = 3;
 }
 
 enum CoordinateSpace {
-  COORDINATE_SPACE_UNSPECIFIED = 0;
+  COORDINATE_SPACE_UNSPECIFIED = 0; // invalid for a usable range
   COORDINATE_SPACE_ORIGINAL_SOURCE = 1;
   COORDINATE_SPACE_CANONICAL_TEXT = 2;
 }
 
 enum TextNormalization {
-  TEXT_NORMALIZATION_UNSPECIFIED = 0;
+  TEXT_NORMALIZATION_UNSPECIFIED = 0; // invalid for a usable range
   TEXT_NORMALIZATION_NONE = 1;
   TEXT_NORMALIZATION_NFC = 2;
   TEXT_NORMALIZATION_NFKC = 3;
@@ -315,33 +363,54 @@ enum TextNormalization {
 }
 
 enum LineEndingPolicy {
-  LINE_ENDING_UNSPECIFIED = 0;
+  LINE_ENDING_UNSPECIFIED = 0;      // invalid for a usable range
   LINE_ENDING_ORIGINAL = 1;
   LINE_ENDING_LF = 2;
   LINE_ENDING_CRLF = 3;
 }
 ```
 
-Recommended defaults:
+Normative defaults:
 
-- Original UTF-8 text source: `UTF8_BYTE`, `ORIGINAL_SOURCE`, `start/end` half-open, `NONE` normalization, `ORIGINAL` line endings.
-- Canonical text: explicit unit (Platform currently uses UTF-16 code units), `CANONICAL_TEXT`, documented normalization and LF policy.
-- No canonical offset is valid as an `ORIGINAL_SOURCE` location.
+- Original UTF-8 text source: `UTF8_BYTE`, `ORIGINAL_SOURCE`, half-open `[start, end)`, `NONE` normalization, `ORIGINAL` line endings.
+- Canonical text: explicit unit; Platform legacy mapping defaults to `UTF16_CODE_UNIT`, but other units may be emitted only when declared.
+- No canonical offset is valid as an `ORIGINAL_SOURCE` record.
+- No unit may be silently converted. A producer that changes units must emit a new record with explicit semantics.
 
-### 4.5 Canonical text range
+### 4.5 Canonical text range and identity
+
+A canonical range is meaningful only relative to a specific canonical text revision. The following binds it to the source, extraction execution, and normalization policy.
 
 ```proto
 message CanonicalTextRange {
-  OffsetUnit unit = 1;             // Platform compatibility: UTF16_CODE_UNIT
-  int64 start = 2;                 // inclusive
-  int64 end = 3;                   // exclusive
-  TextNormalization normalization = 4;
-  LineEndingPolicy line_endings = 5;
-  string canonical_text_digest = 6;
+  CanonicalTextIdentity identity = 1;
+  OffsetUnit unit = 2;              // Platform compatibility default: UTF16_CODE_UNIT
+  int64 start = 3;                  // inclusive
+  int64 end = 4;                    // exclusive
+  TextNormalization normalization = 5;
+  LineEndingPolicy line_endings = 6;
+}
+
+message CanonicalTextIdentity {
+  string canonical_text_id = 1;      // stable within payload
+  string canonical_text_digest = 2;  // SHA-256 of canonical text bytes in `encoding`
+  string encoding = 3;               // e.g. UTF-8, UTF-16LE
+  string source_document_id = 4;
+  string source_digest = 5;
+  string source_version = 6;
+  string extraction_execution_id = 7;
+  string normalization_profile = 8;
+  string normalization_version = 9;
 }
 ```
 
-This is separate from `TextRange` and may coexist with it. An element may have source geometry, source text range, canonical range, both, or none.
+Rules:
+
+- `canonical_text_digest` hashes the exact encoded canonical text, before applying range offsets.
+- `source_*` and `extraction_execution_id` must resolve to the enclosing document and a registered execution.
+- A changed parser, normalization profile, or projection rule creates a new canonical-text identity. Old ranges are not silently reused.
+- Canonical ranges are separate from source records and may coexist with them.
+- An element may have several source records and at most one canonical range in this proposal; multiple canonical revisions require separate payloads or a future explicit collection.
 
 ### 4.6 PDF geometry
 
@@ -349,8 +418,8 @@ This is separate from `TextRange` and may coexist with it. An element may have s
 message PdfGeometry {
   int32 page_number = 1;           // 1-based; 0 when unavailable
   BoundingBox bbox = 2;            // x0,y0,x1,y1
-  string coordinate_system = 3;    // e.g. PDF_USER_SPACE_BOTTOM_LEFT
-  string unit = 4;                 // e.g. POINT
+  string coordinate_system = 3;    // required; e.g. PDF_USER_SPACE_BOTTOM_LEFT
+  string unit = 4;                 // required; e.g. POINT
   int32 rotation = 5;              // 0, 90, 180, 270
   string transform = 6;            // optional documented page transform
 }
@@ -364,6 +433,7 @@ Rules:
 - Platform PDFBox currently supplies adjusted top-left coordinates; migration must transform or label explicitly, never silently reinterpret.
 - Missing geometry is `UNAVAILABLE`; do not fabricate a zero bbox.
 - Rotation must be retained; consumers must not assume zero.
+- Geometry precision belongs to the location record. Geometry can be exact in its coordinate system while no text range is available.
 
 ### 4.7 Format-specific references
 
@@ -381,19 +451,20 @@ Provider-specific references must not become required for generic consumers. A D
 
 ### 4.8 Multi-provider and multi-stage execution provenance
 
-Dispatcher routing is outside this contract. The contract only records durable facts about which execution produced which element, so mixed or fallback extraction remains traceable.
+Dispatcher routing is outside this contract. The contract records durable facts about which execution produced which element.
 
 Requirements:
 
 - Document-level provenance contains an ordered registry of `ExtractionExecution` records.
-- Every element may reference one or more `execution_id` values.
-- A fallback or retry records the previous execution in `parent_execution_ids`; fallback is never silent.
+- Every non-empty element `execution_id` resolves to a record in that registry.
+- An element with no execution ID inherits the document's `primary_execution_id`; if no primary exists, its execution is explicitly unknown.
+- Parent links use `ExecutionLink` with kind `RETRY`, `FALLBACK`, `INPUT_DEPENDENCY`, or `MERGE`.
 - Per-page or per-region routing is represented by element-level execution references, not by a PDF-specific field.
-- Extractor/model/policy versions are recorded as opaque identifiers. The contract does not encode routing decisions.
-- `QualityReport` records complete/degraded/partial/failed status and optional completeness/confidence, separately from extraction failure.
-- Old payloads inherit a single primary execution or remain explicitly unknown.
+- `ExecutionOutcome` is separate from `QualityReport`: an execution can fail while the document succeeds through another execution, and a successful execution can produce degraded-quality output.
+- `EXECUTION_OUTCOME_FAILED` means that execution produced no usable output; it may still appear in history and parent links for failed/retried attempts.
+- Extractor/model/policy versions are opaque identifiers. The contract does not encode routing decisions.
 
-Example: a mixed PDF where page 1 text comes from a PDF parser and page 2 comes from OCR:
+Example: mixed PDF where page 1 text comes from a PDF parser and page 2 comes from OCR:
 
 ```json
 {
@@ -401,9 +472,11 @@ Example: a mixed PDF where page 1 text comes from a PDF parser and page 2 comes 
     "primary_execution_id": "exec-pdf-1",
     "executions": [
       {"execution_id": "exec-pdf-1", "extractor_id": "pdf-extractor",
-       "stage_id": "text", "quality": {"status": "COMPLETE"}},
+       "stage_id": "text", "outcome": "SUCCEEDED",
+       "quality": {"status": "COMPLETE"}},
       {"execution_id": "exec-ocr-2", "extractor_id": "ocr-extractor",
-       "stage_id": "ocr", "parent_execution_ids": ["exec-pdf-1"],
+       "stage_id": "ocr", "outcome": "PARTIAL",
+       "parents": [{"execution_id": "exec-pdf-1", "kind": "FALLBACK"}],
        "quality": {"status": "DEGRADED"}}
     ]
   },
@@ -414,32 +487,45 @@ Example: a mixed PDF where page 1 text comes from a PDF parser and page 2 comes 
 }
 ```
 
-A dispatcher may decide how to produce this structure. The contract does not contain a routing table, confidence threshold, model endpoint, or execution plan.
-
 ### 4.9 Projections
 
-`flattened_text` remains the existing compatibility projection. Add optional projection metadata:
+`flattened_text` remains the legacy compatibility field. It is not automatically lossless and has no embedded loss report. A producer may emit a projection record with `projection_id = "flattened_text"` to describe it; consumers must treat absence of that record as legacy, limited guarantees.
 
 ```proto
 message DocumentProjection {
-  string format = 1;               // "text", "markdown", "html", "json"
-  string digest = 2;
+  string projection_id = 1;        // e.g. "flattened_text", "markdown"
+  string format = 2;               // "text", "markdown", "html", "json"
+  ProjectionOutcome outcome = 3;
+  string unsupported_reason = 4;
+  string digest = 5;
   oneof content {
-    bytes inline_content = 3;
-    PayloadReference reference = 4;
+    bytes inline_content = 6;
+    PayloadReference reference = 7;
   }
-  LossReport loss = 5;
+  LossReport loss = 8;
+}
+
+enum ProjectionOutcome {
+  PROJECTION_OUTCOME_UNSPECIFIED = 0;  // invalid; not a success claim
+  PROJECTION_OUTCOME_SUCCESS_LOSSLESS = 1;
+  PROJECTION_OUTCOME_SUCCESS_WITH_LOSS = 2;
+  PROJECTION_OUTCOME_UNSUPPORTED = 3;
 }
 
 message LossReport {
-  bool lossless = 1;
-  repeated string dropped = 2;     // "table_cell_span", "pdf_geometry", ...
-  repeated string approximated = 3;
-  repeated string unsupported = 4;
+  repeated string dropped = 1;     // "table_cell_span", "pdf_geometry", ...
+  repeated string approximated = 2;
+  repeated string unsupported = 3;
+  repeated string reasons = 4;
 }
 ```
 
-Existing `flattened_text` remains authoritative for compatibility but cannot claim losslessness without a report.
+Rules:
+
+- `SUCCESS_WITH_LOSS` requires at least one loss entry or reason.
+- `UNSUPPORTED` requires `unsupported_reason` and has no content.
+- `SUCCESS_LOSSLESS` means all relevant represented information is preserved for that projection target.
+- A projection must not silently flatten hierarchy, geometry, or source references.
 
 ### 4.10 Dispatcher boundary
 
@@ -453,7 +539,7 @@ The contract must not encode:
 - a second execution request/response model;
 - another canonical document model.
 
-The only dispatcher-related facts in the contract are durable extraction provenance: execution identity, extractor/version, stage, policy version, parent/fallback lineage, and quality status. This keeps #22 focused on the document model while allowing a future dispatcher to use it.
+The only dispatcher-related facts in the contract are durable extraction provenance: execution identity, extractor/version, stage, policy version, parent/fallback lineage, outcome, and quality status. This keeps #22 focused on the document model while allowing a future dispatcher to use it.
 
 ## 5. Compatibility mapping from the current contract
 
@@ -461,46 +547,64 @@ The only dispatcher-related facts in the contract are durable extraction provena
 |---|---|---|
 | `StructuredPayload.payload_descriptor` | unchanged | Schema/processor descriptor remains |
 | `StructuredPayload.inline_content` / `reference` | unchanged | Envelope remains common multimodal carrier |
-| `DocumentPayload.media_type` | `source.media_type` plus existing field | Retain field 1 for old consumers |
+| `DocumentPayload.media_type` | legacy field plus `source.media_type` | If both populated, they must match |
 | `DocumentPayload.metadata` | unchanged | Document metadata remains opaque |
 | `DocumentPayload.elements` | unchanged | Same reading order |
-| `DocumentPayload.flattened_text` | unchanged | Compatibility projection; not source evidence |
-| `DocumentElement.location.page` | `SourceLocation.pdf_geometry.page_number` | Old field retained; old payload maps to geometry |
-| `DocumentElement.location.bbox` | `SourceLocation.pdf_geometry.bbox` | Coordinate system must be declared |
+| `DocumentPayload.flattened_text` | unchanged | Legacy compatibility field; not source evidence |
+| `DocumentElement.location.page` | `source_locations[].pdf_geometry.page_number` | Old field retained; map to a geometry record |
+| `DocumentElement.location.bbox` | `source_locations[].pdf_geometry.bbox` | Coordinate system must be declared |
 | `DocumentElement.id` | unchanged | Stable within payload; document identity added separately |
 | `DocumentElement.child_ids` | unchanged | Hierarchy remains |
 | `ContentProvenance` | unchanged | Already distinguishes embedded/OCR/generated/transcribed |
 | `PayloadDescriptor.processor_id/version` | remains payload-level | Do not duplicate as element provenance |
 | `DocumentElement` without execution IDs | inherits primary execution or `UNKNOWN` | No execution identity is invented |
-| Single-provider payload | one execution record or primary vector | Backward compatible |
+| Single-provider payload | one execution record or primary reference | Backward compatible |
 
-Old payload to new consumer:
+### 5.1 Source identity consistency
 
-- `ElementLocation` with a non-zero page/bbox maps to `PdfGeometry` with `precision = APPROXIMATE` unless the producer explicitly declared exact semantics. Do not infer EXACT.
-- Missing page/bbox maps to `UNAVAILABLE`.
-- No `TextRange` or canonical range is inferred.
-- Missing document class/source descriptor maps to `UNKNOWN`/empty, never guessed.
+- `DocumentPayload.source.media_type` is authoritative when populated.
+- Legacy `DocumentPayload.media_type` must equal `source.media_type` when both are non-empty; mismatch invalidates the document for structured use.
+- `SourceBinding.INHERIT_DOCUMENT` resolves to `DocumentPayload.source`; it does not repeat digest/version.
+- An explicit or derived binding must identify a source that resolves to an immutable digest. A binding that cannot resolve has `REPRODUCIBILITY_NOT_REPRODUCIBLE` or is unusable.
+- A location that repeats a digest/version must match the enclosing source unless its binding kind is `DERIVED`.
+- A stale location retained after source replacement is invalid; consumers must revalidate digest/version before use.
+
+### 5.2 Legacy payload conversion
+
+An old payload with `ElementLocation.page=1` and a bbox maps to one `PdfGeometry` source record:
+
+- Geometry coordinates are exact in their declared coordinate system if the producer supplied them; historical extraction provenance remains approximate for evidence purposes.
+- `precision=APPROXIMATE` unless the producer explicitly supplied exact semantics.
+- `reproducibility` is `DEPENDS_ON_PARSER` or `NOT_REPRODUCIBLE`, never inferred as exact-from-source.
+- No `TextRange` and no canonical range are inferred.
+- Missing page/bbox maps to `UNAVAILABLE`; no zero geometry is created.
+- `document_class=UNKNOWN` and `source` fields only when available; never guessed.
 
 New payload to old consumer:
 
 - Existing fields remain populated.
 - Unknown fields are ignored by protobuf.
 - Old consumers may use `ElementLocation` only when the new producer also populates it for compatibility.
+- Old consumers cannot infer source/canonical ranges from geometry.
 
 ## 6. Schema evolution rules
 
 1. `StructuredPayload` and `DocumentPayload` are evolved additively; no parallel document hierarchy.
 2. Existing field numbers and meanings are immutable.
 3. New fields are optional; no adapter is forced to emit unsupported capabilities.
-4. `PayloadDescriptor.schema_version` changes for semantic schema changes.
+4. `PayloadDescriptor.schema_version` changes for semantic schema changes; wire-compatible additive fields do not automatically change semantic capability versioning.
 5. Unknown fields are ignored; consumers must not require unknown extensions.
-6. `UNSPECIFIED` precision/reproducibility maps to unavailable/unknown, never exact.
+6. `UNSPECIFIED` binding, coordinate, precision, or reproducibility values make a location invalid or unavailable, never exact.
 7. Source format strings are extensible; document class is a controlled enum with `UNKNOWN`.
 8. Provider-specific details live in `attributes`/`FormatReference`, not shared types.
 9. Contract mirror updates are atomic across Platform and Content Extractor.
 10. A capability declaration must describe which location types and precisions an adapter can produce.
-11. Execution IDs are stable within a payload; an element with no execution ID inherits the document's primary execution or is explicitly unknown.
-12. Multi-stage/fallback lineage uses `parent_execution_ids`; it is provenance, not a routing policy.
+11. Execution IDs are stable within a payload; every non-empty element execution ID must resolve to a registered execution.
+12. Parent relationships use typed `ExecutionLink` entries (`RETRY`, `FALLBACK`, `INPUT_DEPENDENCY`, `MERGE`); they are provenance, not routing decisions.
+13. `ExecutionOutcome` and `QualityStatus` are distinct; failed executions may remain in history but contribute no usable output.
+14. `DOCUMENT`, `SECTION`, `FIGURE`, and `UNKNOWN` are proposed structural types; table cells retain cell-level structure and optional locations.
+15. Canonical offset units are explicit. `UTF16_CODE_UNIT` is the legacy Platform default, not a universal source unit.
+16. Canonical text identity includes source, execution, normalization profile/version, encoding, and digest; no canonical range is valid across a changed identity.
 
 ## 7. Concrete examples
 
@@ -518,7 +622,9 @@ Source: a PDF with source digest `sha256:abc...`. Element is a heading on page 1
       "id": "p1-e1",
       "type": "HEADING",
       "text": "Distributed Systems",
-      "source_location": {
+      "source_locations": [{
+        "location_id": "loc-1",
+        "source_binding": {"kind": "INHERIT_DOCUMENT"},
         "precision": "EXACT",
         "reproducibility": "EXACT_FROM_SOURCE",
         "pdf_geometry": {
@@ -528,7 +634,7 @@ Source: a PDF with source digest `sha256:abc...`. Element is a heading on page 1
           "unit": "POINT",
           "rotation": 0
         }
-      }
+      }]
     }]
   }
 }
@@ -536,11 +642,13 @@ Source: a PDF with source digest `sha256:abc...`. Element is a heading on page 1
 
 No text range is claimed. A bbox is not converted to a character offset.
 
-### 7.2 PDF approximate location
+### 7.2 PDF approximate geometry
 
 ```json
 {
-  "source_location": {
+  "source_locations": [{
+    "location_id": "loc-2",
+    "source_binding": {"kind": "INHERIT_DOCUMENT"},
     "precision": "APPROXIMATE",
     "reproducibility": "DEPENDS_ON_PARSER",
     "pdf_geometry": {
@@ -549,19 +657,21 @@ No text range is claimed. A bbox is not converted to a character offset.
       "unit": "POINT",
       "rotation": 90
     }
-  }
+  }]
 }
 ```
 
 The missing bbox remains absent; the consumer must not invent one.
 
-### 7.3 Markdown exact source range
+### 7.3 Markdown exact source range and canonical identity
 
 Source bytes are UTF-8; range is half-open and refers to the original Markdown bytes.
 
 ```json
 {
-  "source_location": {
+  "source_locations": [{
+    "location_id": "loc-src-1",
+    "source_binding": {"kind": "INHERIT_DOCUMENT"},
     "precision": "EXACT",
     "reproducibility": "EXACT_FROM_SOURCE",
     "text_range": {
@@ -572,14 +682,24 @@ Source bytes are UTF-8; range is half-open and refers to the original Markdown b
       "normalization": "NONE",
       "line_endings": "ORIGINAL"
     }
-  },
+  }],
   "canonical_text_range": {
+    "identity": {
+      "canonical_text_id": "canon-1",
+      "canonical_text_digest": "sha256:def...",
+      "encoding": "UTF-16LE",
+      "source_document_id": "doc-1",
+      "source_digest": "sha256:abc...",
+      "source_version": "v1",
+      "extraction_execution_id": "exec-md-1",
+      "normalization_profile": "platform-markdown",
+      "normalization_version": "1"
+    },
     "unit": "UTF16_CODE_UNIT",
     "start": 118,
     "end": 241,
     "normalization": "NFC",
-    "line_endings": "LF",
-    "canonical_text_digest": "sha256:def..."
+    "line_endings": "LF"
   }
 }
 ```
@@ -590,7 +710,9 @@ The source range and canonical range are deliberately different. They must not b
 
 ```json
 {
-  "source_location": {
+  "source_locations": [{
+    "location_id": "loc-unavail-1",
+    "source_binding": {"kind": "INHERIT_DOCUMENT"},
     "precision": "UNAVAILABLE",
     "reproducibility": "NOT_REPRODUCIBLE",
     "text_range": {
@@ -599,18 +721,43 @@ The source range and canonical range are deliberately different. They must not b
       "normalization": "NONE",
       "line_endings": "ORIGINAL"
     }
-  }
+  }]
 }
 ```
 
 Start/end are absent. A consumer must not search `flattened_text` to recover them.
 
-### 7.5 Legacy payload conversion
+### 7.5 One element with geometry and a source text range
 
-An old payload with `ElementLocation.page=1` and a bbox maps to:
+The repeated collection is required here: a single oneof alternative would lose one of these records.
 
-- `PdfGeometry` with page/bbox.
-- `precision=APPROXIMATE` unless the producer provided explicit precision.
+```json
+{
+  "id": "p1-e7",
+  "source_locations": [
+    {
+      "location_id": "loc-geom",
+      "source_binding": {"kind": "INHERIT_DOCUMENT"},
+      "precision": "EXACT",
+      "reproducibility": "DEPENDS_ON_PARSER",
+      "pdf_geometry": {"page_number": 1, "coordinate_system": "PDF_USER_SPACE_BOTTOM_LEFT", "unit": "POINT", "rotation": 0}
+    },
+    {
+      "location_id": "loc-text",
+      "source_binding": {"kind": "INHERIT_DOCUMENT"},
+      "precision": "APPROXIMATE",
+      "reproducibility": "DEPENDS_ON_NORMALIZATION",
+      "text_range": {"unit": "UTF8_BYTE", "coordinate_space": "ORIGINAL_SOURCE", "start": 300, "end": 420, "normalization": "NONE", "line_endings": "ORIGINAL"}
+    }
+  ]
+}
+```
+
+### 7.6 Legacy payload conversion
+
+An old payload with `ElementLocation.page=1` and a bbox maps to one `PdfGeometry` record:
+
+- `precision=APPROXIMATE` and `reproducibility=DEPENDS_ON_PARSER` for historical evidence.
 - No source text range.
 - No canonical range.
 - `document_class=UNKNOWN`.
@@ -626,7 +773,13 @@ An old payload with `ElementLocation.page=1` and a bbox maps to:
 | JSON | Full represented model | Only fields explicitly omitted by the exporter; no silent loss |
 | Legacy `DocumentPayload` | Existing fields 1-4 | New identity/source/location/projection precision unless mapped |
 
-Every lossy export must carry or reference a `LossReport`. A projection that cannot represent required information is `UNSUPPORTED`, not a silent approximation.
+Projection records use `ProjectionOutcome`:
+
+- `SUCCESS_LOSSLESS` — all relevant represented information is preserved.
+- `SUCCESS_WITH_LOSS` — output exists and a `LossReport` explains what was dropped or approximated.
+- `UNSUPPORTED` — no output; `unsupported_reason` is required.
+
+`flattened_text` is a legacy field with explicitly limited guarantees. A producer may add a projection record with `projection_id="flattened_text"`; absence of that record means old behavior and no lossless claim.
 
 ## 9. Verification test design
 
@@ -658,16 +811,38 @@ Every lossy export must carry or reference a `LossReport`. A projection that can
 4. JSON projection reports no silent loss.
 5. Unsupported projection returns `UNSUPPORTED` with reason, not partial success.
 
-### 9.4 Multi-provider provenance
+### 9.4 Multiple locations and canonical identity
+
+1. One element with both `PdfGeometry` and `TextRange` records retains both after round-trip.
+2. Two source records with different location IDs, precision, and reproducibility remain independently addressable.
+3. A canonical range with source/execution/normalization identity round-trips.
+4. A canonical range whose source digest or execution ID does not match is rejected or reported unavailable.
+5. A changed normalization profile/version invalidates old canonical ranges; no silent reuse.
+6. `INHERIT_DOCUMENT` resolves to the document source; explicit matching binding succeeds; mismatched explicit binding fails validation.
+7. Source replacement with stale digest/version produces an invalid/unavailable result, not exact evidence.
+8. `UNSPECIFIED` binding, unit, coordinate space, precision, or reproducibility is not treated as exact.
+
+### 9.5 Projection outcomes
+
+1. Lossless projection reports `SUCCESS_LOSSLESS`.
+2. Lossy projection reports `SUCCESS_WITH_LOSS` with non-empty loss/reason.
+3. Unsupported projection reports `UNSUPPORTED` and no content.
+4. `flattened_text` without a projection record is treated as legacy, not lossless.
+5. A projection record with `projection_id="flattened_text"` describes its loss explicitly.
+
+### 9.6 Multi-provider provenance
 
 1. Mixed PDF pages record distinct execution IDs for text and OCR elements.
-2. Fallback execution records the prior execution in `parent_execution_ids`.
-3. An element without execution IDs inherits the primary execution, or is reported unknown for legacy payloads.
-4. A merged element can reference multiple execution IDs without losing lineage.
-5. Quality degradation is distinct from extraction failure.
-6. No dispatcher routing table, model endpoint, or policy decision is serialized into the document contract.
+2. Fallback execution records an `ExecutionLink` of kind `FALLBACK`.
+3. Retry, merge, and input-dependency links remain distinguishable.
+4. Every non-empty element execution ID resolves to an execution record; unresolved IDs fail validation.
+5. An element without execution IDs inherits the primary execution, or is reported unknown for legacy payloads.
+6. A merged element can reference multiple execution IDs without losing lineage.
+7. `ExecutionOutcome.FAILED` can coexist with a successful document and contributes no usable output.
+8. Quality degradation is distinct from execution failure.
+9. No dispatcher routing table, model endpoint, or policy decision is serialized into the document contract.
 
-### 9.5 Evidence compatibility
+### 9.7 Evidence compatibility
 
 1. Historical P1/A2/A4 evidence maps to canonical elements with stable identity where possible.
 2. Changed or missing coordinates produce explicit `APPROXIMATE`/`UNAVAILABLE` outcomes.
@@ -680,11 +855,12 @@ Every lossy export must carry or reference a `LossReport`. A projection that can
 
 **Conditionally ready for design, not implementation.**
 
-- PDF geometry semantics are sufficiently specified (page number, bbox, origin, units, rotation, precision).
-- Markdown original/canonical range distinction is specified.
+- Multiple simultaneous location records are now representable; the exclusive-oneof blocker is resolved in the proposal.
+- PDF geometry semantics are specified (page number, bbox, origin, units, rotation, per-record precision).
+- Markdown original and canonical ranges are specified separately, with canonical identity binding.
 - PDF/Markdown adapters still need concrete source-range extraction support.
 - The existing `PdfPayload`/`MarkdownPayload` alternatives are rejected: adapters target the common `DocumentPayload`.
-- Readiness to implement is blocked until schema fields are approved and mirrored.
+- Readiness to implement is blocked until schema fields, validation rules, and mirroring are approved.
 - Element-level execution provenance is sufficient for mixed PDF/OCR results; dispatcher routing remains out of scope.
 
 ### #950 — production ownership transition
@@ -706,24 +882,35 @@ Every lossy export must carry or reference a `LossReport`. A projection that can
 - Exact mapping is impossible for missing/approximate locations; those must be reported.
 - No frozen artifact, denominator, gold annotation, or metric may change.
 
-## 11. Blockers and unresolved questions
+## 11. Proposed dispositions and remaining decisions
 
-1. **Canonical unit decision:** Platform currently uses UTF-16 code units for canonical structural offsets. Should the contract make `UTF16_CODE_UNIT` the required canonical unit for compatibility, or allow multiple units with explicit metadata?
-2. **PDF precision default:** Should legacy `ElementLocation` page/bbox map to `APPROXIMATE` by default or to an explicit `UNKNOWN` state not currently available?
-3. **Document class scope:** Confirm that `TEXT`, `SPREADSHEET`, `TRANSCRIPT`, `STRUCTURED_DATA`, and `UNKNOWN` are the initial controlled classes; image/video remain modality payloads.
-4. **Section/document element types:** Current `DocumentElementType` lacks `DOCUMENT`, `SECTION`, `FIGURE`, and `UNKNOWN`. Decide whether these are added or represented via hierarchy/attributes.
-5. **Table/source spans:** Define cell-level source locations and spans before claiming table evidence parity.
-6. **Source descriptor duplication:** Confirm whether `SourceLocation` repeats source digest/version or inherits them from `DocumentPayload.source`.
-7. **Schema version threshold:** Decide which additions require a schema version bump versus an additive minor revision.
-8. **Exporter ownership:** Confirm that projection/export code is owned by Content Extractor or a separate exporter layer; it must not become a Platform parser.
-9. **Execution provenance cardinality:** Confirm whether an element may reference multiple executions and whether merged elements are represented by repeated IDs or a separate merge record.
-10. **Quality ownership:** Confirm which quality dimensions are durable contract facts versus dispatcher-local diagnostics.
+The following defaults are proposed for approval; they are not yet normative.
+
+| Area | Proposed disposition | Remaining question |
+|---|---|---|
+| Canonical unit | UTF-16 code units for legacy Platform canonical ranges; all units explicit; no silent conversion | Whether canonical ranges should allow multiple units in one payload |
+| Legacy PDF precision | Geometry may be exact in its coordinate system; historical evidence precision is `APPROXIMATE`; no source text range inferred | Exact validation rule for old payloads |
+| Element types | Add `DOCUMENT`, `SECTION`, `FIGURE`, `UNKNOWN`; retain existing table row/cell types | Whether `DOCUMENT` is an element or only root metadata |
+| Table cells | Cell-level elements and optional source locations | Whether cell spans need dedicated fields |
+| Source binding | `INHERIT_DOCUMENT` by default; explicit binding only for different/derived source | Whether derived sources need their own document ID |
+| Schema version | Separate wire compatibility from semantic capability version | Exact versioning policy |
+| Exporter ownership | Content Extractor owns canonical projections | Whether a separate exporter service is ever needed |
+| Execution cardinality | Elements may reference multiple executions; typed parent links | Whether merged elements need a dedicated merge record |
+| Quality | Execution outcome is separate from quality status | Which quality metrics are durable |
+
+Additional unresolved questions:
+
+1. Exact canonical-text hashing input and encoding for `canonical_text_digest`.
+2. Whether source ranges on PDF text require a separate text-layer identity in addition to page/bbox.
+3. Whether `UNKNOWN` execution identity is represented by an empty list or an explicit sentinel.
+4. How table cell spans and cell-level locations are versioned.
+5. Whether audio/video transcript documents reuse the same document class or stay modality payloads.
 
 ## 12. Readiness conclusion
 
-- **Contract design:** Proposal is sufficient for review and adapter design discussion, including multi-provider provenance.
-- **#20/#21:** Not ready for implementation until schema approval and mirroring; design can proceed.
-- **#950:** Blocked until a production mapping from the approved payload exists.
-- **#947:** Blocked until contract, adapters, and frozen compatibility reference are available.
+- **Contract design:** Proposal is sufficient for a second review after this revision.
+- **#20/#21:** Conditional; location multiplicity and binding semantics are now specified, but implementation is blocked until schema approval/mirroring and adapter source-range support.
+- **#950:** Blocked until an approved production mapping from SCEP payload exists; unavailable-coordinate handling can proceed independently.
+- **#947:** Blocked until contract approval, adapter output, and a frozen compatibility reference exist.
 
 No production implementation, contract modification, migration, benchmark execution, or baseline change is authorized by this proposal.
