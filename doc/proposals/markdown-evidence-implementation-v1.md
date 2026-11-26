@@ -62,6 +62,8 @@ Line-ending rules:
 
 - Raw source range uses original `\n`, `\r\n`, or `\r` bytes.
 - Parser text may convert line endings only through an explicit, tested transformation.
+- Parser text target is normalized LF (`\n`) for every element in the minimum slice, regardless of original CRLF/CR/LF source.
+- Source ranges always retain the original bytes; only parser/canonical text is normalized.
 - CRLF/CR fixtures are mandatory.
 
 Unicode rules:
@@ -113,10 +115,10 @@ Minimum transformation rules:
 | Element | Transformation |
 |---|---|
 | HEADING | Remove one `#{1,6}` marker and following spaces; trim outer whitespace |
-| PARAGRAPH | Trim line-leading/trailing whitespace; join wrapped lines with newline; do not decode entities or remove inline markup |
+| PARAGRAPH | Trim line-leading/trailing whitespace; join wrapped lines with normalized LF (`\n`); do not decode entities or remove inline markup |
 | LIST_ITEM | Remove leading indentation and one list marker; trim outer whitespace |
 | LIST | Generated from item text/order; not a source slice |
-| CODE_BLOCK | Remove opening/closing fence lines; preserve code line content and internal line endings as normalized |
+| CODE_BLOCK | Remove opening/closing fence lines; preserve code line content; join internal lines with normalized LF (`\n`); source range retains original bytes |
 
 Rules:
 
@@ -183,6 +185,7 @@ Each fixture must include expected raw byte slices, not only expected parser tex
 ### Transformations
 
 - `raw_slice -> parser_text` matches the documented rule for each element type.
+- Parser text uses normalized LF regardless of original CRLF/CR/LF; source ranges retain original bytes.
 - Inline Markdown/entity handling matches the declared non-interpretation/decoding policy.
 - No canonical identity is emitted when normalization/Unicode version is not reproducible.
 
