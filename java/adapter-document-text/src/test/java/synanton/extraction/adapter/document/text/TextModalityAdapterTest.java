@@ -7,6 +7,7 @@ import org.synanton.extraction.spi.model.ExtractionOptions;
 import org.synanton.extraction.spi.model.ExtractionRequest;
 import org.synanton.extraction.spi.model.ElementType;
 import org.synanton.extraction.spi.model.NormalizedElement;
+import org.synanton.extraction.spi.model.SourceSpan;
 import org.synanton.extraction.spi.model.FeatureOutcome;
 import org.synanton.extraction.spi.model.ObjectRef;
 
@@ -217,6 +218,79 @@ class TextModalityAdapterTest {
         assertThat(result.document().metadata())
                 .containsEntry("Author", "Ada")
                 .containsEntry("Edition", "2");
+    }
+
+    @Test
+    void shouldEmitRawMarkdownSourceRanges() throws Exception {
+        String content = "# Title\nBody with **bold**.\n\n- item\n  - nested\n\n```js\nconst x = 1;\n```\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.document().source()).isNotNull();
+        assertThat(result.document().source().sourceFormat()).isEqualTo("markdown");
+        assertThat(result.document().source().sourceDigest()).isEqualTo("a".repeat(64));
+
+        assertRaw(result, bytes, ElementType.HEADING, "# Title");
+        assertRaw(result, bytes, ElementType.PARAGRAPH, "Body with **bold**.");
+        assertRaw(result, bytes, ElementType.LIST, "- item\n  - nested");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK, "```js\nconst x = 1;\n```");
+    }
+
+    @Test
+    void shouldPreserveCrlfBytesWhileNormalizingParserText() throws Exception {
+        String content = "# Title\r\nBody\r\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement heading = element(result, ElementType.HEADING);
+        assertThat(heading.text()).isEqualTo("Title");
+        SourceSpan span = heading.sourceSpans().getFirst();
+        assertThat(new String(bytes, (int) span.startByte(), (int) (span.endByte() - span.startByte()),
+                StandardCharsets.UTF_8)).isEqualTo("# Title");
+    }
+
+    @Test
+    void shouldKeepSupplementaryUnicodeRangesStable() throws Exception {
+        String content = "# 😀 Distributed Systems\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.HEADING, "# 😀 Distributed Systems");
+    }
+
+    @Test
+    void shouldFailClosedOnMalformedUtf8() throws Exception {
+        byte[] malformed = new byte[]{'#', ' ', (byte) 0xC3, (byte) 0x28};
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(malformed));
+
+        assertThat(result.isSuccess()).isFalse();
+    }
+
+    private static void assertRaw(AdapterResult result, byte[] bytes, ElementType type, String expected) {
+        NormalizedElement element = element(result, type);
+        assertThat(element.sourceSpans()).hasSize(1);
+        SourceSpan span = element.sourceSpans().getFirst();
+        String actual = new String(bytes, (int) span.startByte(),
+                (int) (span.endByte() - span.startByte()), StandardCharsets.UTF_8);
+        assertThat(actual).isEqualTo(expected);
+    }
+
+    private static NormalizedElement element(AdapterResult result, ElementType type) {
+        return result.document().elements().stream()
+                .filter(element -> element.type() == type)
+                .findFirst()
+                .orElseThrow();
     }
 
     @Test

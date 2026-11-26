@@ -15,10 +15,15 @@ import org.synanton.extraction.spi.model.ExtractionRequest;
 import org.synanton.extraction.spi.model.FeatureOutcome;
 import org.synanton.extraction.spi.model.NormalizedDocument;
 import org.synanton.extraction.spi.model.NormalizedElement;
+import org.synanton.extraction.spi.model.NormalizedSourceDescriptor;
+import org.synanton.extraction.spi.model.SourceSpan;
 import org.synanton.extraction.spi.port.ModalityAdapter;
 
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -79,9 +84,9 @@ public class TextModalityAdapter implements ModalityAdapter {
             List<NormalizedElement> elements;
             Map<String, String> markdownMetadata = Map.of();
             if (isMarkdown(request.mediaType())) {
-                String markdown = new String(bytes, StandardCharsets.UTF_8);
+                MarkdownSource markdown = readMarkdown(bytes);
                 elements = buildMarkdownElements(markdown);
-                markdownMetadata = extractMarkdownMetadata(markdown);
+                markdownMetadata = extractMarkdownMetadata(markdown.text());
             } else {
                 // Use an unlimited buffer (-1) to capture the full document body.
                 BodyContentHandler handler = new BodyContentHandler(-1);
@@ -99,7 +104,7 @@ public class TextModalityAdapter implements ModalityAdapter {
                     .reduce("", (a, b) -> a.isBlank() ? b : a + "\n" + b);
 
             NormalizedDocument document = new NormalizedDocument(
-                    request.mediaType(), docMetadata, elements, flattenedText);
+                    request.mediaType(), docMetadata, elements, flattenedText, sourceDescriptor(request));
 
             Map<String, FeatureOutcome> featureStates = buildFeatureStates(request);
             return AdapterResult.success(document, featureStates);
@@ -127,107 +132,126 @@ public class TextModalityAdapter implements ModalityAdapter {
      * Parses Markdown into structural elements without reconstructing structure from Tika text.
      * HTML comments and YAML front matter are treated as metadata, not structural content.
      */
-    private List<NormalizedElement> buildMarkdownElements(String markdown) {
-        if (markdown == null || markdown.isBlank()) {
+    private List<NormalizedElement> buildMarkdownElements(MarkdownSource markdown) {
+        List<MarkdownLine> lines = markdown.lines();
+        if (lines.isEmpty()) {
             return List.of();
         }
-        String text = markdown.replace("\r\n", "\n").replace('\r', '\n');
-        String[] lines = text.split("\n", -1);
         List<NormalizedElement> elements = new ArrayList<>();
         int nextId = 1;
         int i = 0;
         boolean metadataPreamble = true;
 
         // Skip YAML front matter at the start of the document.
-        if (lines.length > 0 && lines[0].strip().equals("---")) {
-            for (i = 1; i < lines.length; i++) {
-                if (lines[i].strip().equals("---")) { i++; break; }
+        if (lines.getFirst().text().strip().equals("---")) {
+            for (i = 1; i < lines.size(); i++) {
+                if (lines.get(i).text().strip().equals("---")) { i++; break; }
             }
         }
 
-        while (i < lines.length) {
-            String line = lines[i];
-            String stripped = line.strip();
+        while (i < lines.size()) {
+            MarkdownLine line = lines.get(i);
+            String raw = line.text();
+            String stripped = raw.strip();
 
             if (stripped.isEmpty()) { i++; continue; }
-            if (metadataPreamble && METADATA_LINE.matcher(line).matches()) {
+            if (metadataPreamble && METADATA_LINE.matcher(raw).matches()) {
                 i++;
                 continue;
             }
             if (stripped.startsWith("<!--")) {
-                while (i < lines.length && !lines[i].contains("-->")) i++;
+                while (i < lines.size() && !lines.get(i).text().contains("-->")) i++;
                 i++;
                 continue;
             }
 
-            Matcher fence = FENCE.matcher(line);
+            Matcher fence = FENCE.matcher(raw);
             if (fence.matches()) {
                 String fenceMarker = fence.group(1);
                 String language = fence.group(2).strip();
+                int startByte = line.startByte();
+                int endByte = line.contentEndByte();
                 StringBuilder code = new StringBuilder();
                 i++;
-                while (i < lines.length && !lines[i].strip().startsWith(fenceMarker)) {
+                while (i < lines.size() && !lines.get(i).text().strip().startsWith(fenceMarker)) {
                     if (!code.isEmpty()) code.append('\n');
-                    code.append(lines[i]);
+                    code.append(lines.get(i).text());
+                    endByte = lines.get(i).contentEndByte();
                     i++;
                 }
-                if (i < lines.length) i++;
+                if (i < lines.size()) {
+                    endByte = lines.get(i).contentEndByte();
+                    i++;
+                }
+                String id = "e" + nextId++;
                 elements.add(new NormalizedElement(
-                        "e" + nextId++, ElementType.CODE_BLOCK, ElementBounds.absent(),
+                        id, ElementType.CODE_BLOCK, ElementBounds.absent(),
                         code.toString(), ContentOrigin.EMBEDDED_TEXT, 0, List.of(),
-                        language.isEmpty() ? Map.of() : Map.of("language", language), null));
+                        language.isEmpty() ? Map.of() : Map.of("language", language), null,
+                        List.of(sourceSpan(id, startByte, endByte))));
                 continue;
             }
 
-            Matcher heading = HEADING.matcher(line);
+            Matcher heading = HEADING.matcher(raw);
             if (heading.matches()) {
                 int level = heading.group(1).length();
                 if (level >= 2) metadataPreamble = false;
+                String id = "e" + nextId++;
                 elements.add(new NormalizedElement(
-                        "e" + nextId++, ElementType.HEADING, ElementBounds.absent(),
+                        id, ElementType.HEADING, ElementBounds.absent(),
                         heading.group(2).strip(), ContentOrigin.EMBEDDED_TEXT,
-                        level, List.of(), Map.of(), null));
+                        level, List.of(), Map.of(), null,
+                        List.of(sourceSpan(id, line.startByte(), line.contentEndByte()))));
                 i++;
                 continue;
             }
 
-            if (LIST_ITEM.matcher(line).matches()) {
+            if (LIST_ITEM.matcher(raw).matches()) {
                 i = parseList(lines, i, elements, nextId);
                 nextId = elements.stream().mapToInt(e -> idNumber(e.id())).max().orElse(0) + 1;
                 continue;
             }
 
             StringBuilder paragraph = new StringBuilder();
-            while (i < lines.length) {
-                String current = lines[i];
-                String currentStripped = current.strip();
+            int startByte = line.startByte();
+            int endByte = line.contentEndByte();
+            while (i < lines.size()) {
+                MarkdownLine current = lines.get(i);
+                String currentStripped = current.text().strip();
                 if (currentStripped.isEmpty() || currentStripped.startsWith("<!--")
-                        || HEADING.matcher(current).matches() || LIST_ITEM.matcher(current).matches()
-                        || FENCE.matcher(current).matches()) {
+                        || HEADING.matcher(current.text()).matches()
+                        || LIST_ITEM.matcher(current.text()).matches()
+                        || FENCE.matcher(current.text()).matches()) {
                     break;
                 }
                 if (!paragraph.isEmpty()) paragraph.append('\n');
                 paragraph.append(currentStripped);
+                endByte = current.contentEndByte();
                 i++;
             }
             if (!paragraph.isEmpty()) {
+                String id = "e" + nextId++;
                 elements.add(new NormalizedElement(
-                        "e" + nextId++, ElementType.PARAGRAPH, ElementBounds.absent(),
+                        id, ElementType.PARAGRAPH, ElementBounds.absent(),
                         paragraph.toString(), ContentOrigin.EMBEDDED_TEXT, 0,
-                        List.of(), Map.of(), null));
+                        List.of(), Map.of(), null,
+                        List.of(sourceSpan(id, startByte, endByte))));
             }
         }
         return elements;
     }
 
-    private int parseList(String[] lines, int start, List<NormalizedElement> elements, int firstId) {
+    private int parseList(List<MarkdownLine> lines, int start, List<NormalizedElement> elements, int firstId) {
         List<NormalizedElement> items = new ArrayList<>();
         List<NormalizedElement> parents = new ArrayList<>();
         int id = firstId + 1;
         boolean ordered = false;
         int i = start;
-        while (i < lines.length) {
-            Matcher m = LIST_ITEM.matcher(lines[i]);
+        int listStartByte = lines.get(start).startByte();
+        int listEndByte = lines.get(start).contentEndByte();
+        while (i < lines.size()) {
+            MarkdownLine line = lines.get(i);
+            Matcher m = LIST_ITEM.matcher(line.text());
             if (!m.matches()) break;
             int level = (m.group(1).length() / 2) + 1;
             if (items.isEmpty()) ordered = Character.isDigit(m.group(2).charAt(0));
@@ -240,15 +264,18 @@ public class TextModalityAdapter implements ModalityAdapter {
                 children.add("e" + id);
                 NormalizedElement updated = new NormalizedElement(parent.id(), parent.type(), parent.bounds(),
                         parent.text(), parent.contentOrigin(), parent.level(), children,
-                        parent.attributes(), parent.alternateRepresentation());
+                        parent.attributes(), parent.alternateRepresentation(), parent.sourceSpans());
                 items.set(items.indexOf(parent), updated);
                 parents.set(parents.size() - 1, updated);
             }
+            String itemId = "e" + id++;
             NormalizedElement item = new NormalizedElement(
-                    "e" + id++, ElementType.LIST_ITEM, ElementBounds.absent(), itemText,
-                    ContentOrigin.EMBEDDED_TEXT, level, List.of(), Map.of(), null);
+                    itemId, ElementType.LIST_ITEM, ElementBounds.absent(), itemText,
+                    ContentOrigin.EMBEDDED_TEXT, level, List.of(), Map.of(), null,
+                    List.of(sourceSpan(itemId, line.startByte(), line.contentEndByte())));
             items.add(item);
             parents.add(item);
+            listEndByte = line.contentEndByte();
             i++;
         }
         String listId = "e" + firstId;
@@ -256,9 +283,64 @@ public class TextModalityAdapter implements ModalityAdapter {
                 .map(NormalizedElement::id).toList();
         elements.add(new NormalizedElement(listId, ElementType.LIST, ElementBounds.absent(), "",
                 ContentOrigin.EMBEDDED_TEXT, 1, topLevel,
-                ordered ? Map.of("ordered", "true") : Map.of("ordered", "false"), null));
+                ordered ? Map.of("ordered", "true") : Map.of("ordered", "false"), null,
+                List.of(sourceSpan(listId, listStartByte, listEndByte))));
         elements.addAll(items);
         return i;
+    }
+
+    private static SourceSpan sourceSpan(String elementId, int startByte, int endByte) {
+        return new SourceSpan("span-" + elementId, startByte, endByte);
+    }
+
+    private static NormalizedSourceDescriptor sourceDescriptor(ExtractionRequest request) {
+        if (request.source() == null) {
+            return null;
+        }
+        String format = isMarkdown(request.mediaType()) ? "markdown" : request.mediaType();
+        return new NormalizedSourceDescriptor(
+                request.mediaType(), format, request.source().sha256(),
+                request.source().version(), request.source().key());
+    }
+
+    private record MarkdownLine(String text, int startByte, int contentEndByte) { }
+
+    private record MarkdownSource(String text, List<MarkdownLine> lines) { }
+
+    private static MarkdownSource readMarkdown(byte[] bytes) throws CharacterCodingException {
+        String text = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString();
+        List<MarkdownLine> lines = new ArrayList<>();
+        int lineStart = 0;
+        int i = 0;
+        while (i < bytes.length) {
+            byte b = bytes[i];
+            if (b == '\n' || b == '\r') {
+                int contentEnd = i;
+                int terminatorEnd = i + 1;
+                if (b == '\r' && i + 1 < bytes.length && bytes[i + 1] == '\n') {
+                    terminatorEnd = i + 2;
+                    i++;
+                }
+                String lineText = new String(bytes, lineStart, contentEnd - lineStart, StandardCharsets.UTF_8);
+                if (lineStart == 0 && lineText.startsWith("\uFEFF")) {
+                    lineText = lineText.substring(1);
+                }
+                lines.add(new MarkdownLine(lineText, lineStart, contentEnd));
+                lineStart = terminatorEnd;
+            }
+            i++;
+        }
+        if (lineStart < bytes.length) {
+            String lineText = new String(bytes, lineStart, bytes.length - lineStart, StandardCharsets.UTF_8);
+            if (lineStart == 0 && lineText.startsWith("\uFEFF")) {
+                lineText = lineText.substring(1);
+            }
+            lines.add(new MarkdownLine(lineText, lineStart, bytes.length));
+        }
+        return new MarkdownSource(text, lines);
     }
 
     private static int idNumber(String id) {

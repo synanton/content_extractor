@@ -13,12 +13,23 @@ import java.util.Map;
  * @param metadata      document-level key-value metadata (author, title, language, etc.)
  * @param elements      all structural elements in reading order
  * @param flattenedText concatenated plain text derived from {@code elements}
+ * @param source        immutable source identity, or null when unavailable
  */
 public record NormalizedDocument(
         String mediaType,
         Map<String, String> metadata,
         List<NormalizedElement> elements,
-        String flattenedText) {
+        String flattenedText,
+        NormalizedSourceDescriptor source) {
+
+    /** Backward-compatible constructor for adapters without source identity. */
+    public NormalizedDocument(
+            String mediaType,
+            Map<String, String> metadata,
+            List<NormalizedElement> elements,
+            String flattenedText) {
+        this(mediaType, metadata, elements, flattenedText, null);
+    }
 
     /**
      * Compact constructor that defensively copies mutable collections.

@@ -21,6 +21,7 @@ import java.util.Map;
  * @param childIds                ordered identifiers of direct child elements
  * @param attributes              arbitrary key-value metadata attached to the element
  * @param alternateRepresentation an alternate string representation (LaTeX, VLM description, etc.)
+ * @param sourceSpans             verified original-source spans, empty when unavailable
  */
 public record NormalizedElement(
         String id,
@@ -31,13 +32,30 @@ public record NormalizedElement(
         int level,
         List<String> childIds,
         Map<String, String> attributes,
-        String alternateRepresentation) {
+        String alternateRepresentation,
+        List<SourceSpan> sourceSpans) {
+
+    /** Backward-compatible constructor for adapters without verified source spans. */
+    public NormalizedElement(
+            String id,
+            ElementType type,
+            ElementBounds bounds,
+            String text,
+            ContentOrigin contentOrigin,
+            int level,
+            List<String> childIds,
+            Map<String, String> attributes,
+            String alternateRepresentation) {
+        this(id, type, bounds, text, contentOrigin, level, childIds, attributes,
+            alternateRepresentation, List.of());
+    }
 
     /**
      * Compact constructor that defensively copies mutable collections.
      */
     public NormalizedElement {
-        childIds   = List.copyOf(childIds);
-        attributes = Map.copyOf(attributes);
+        childIds    = List.copyOf(childIds);
+        attributes  = Map.copyOf(attributes);
+        sourceSpans = List.copyOf(sourceSpans);
     }
 }
