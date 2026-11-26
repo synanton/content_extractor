@@ -140,6 +140,14 @@ message SourceBinding {
   string origin_source_version = 4;
 }
 
+message FormatReference {
+  string format = 1;               // docx, xlsx, html, audio, ...
+  string reference = 2;            // documented format-specific reference
+  map<string, string> attributes = 3;
+  string representation_id = 4;    // required for derived representations
+  string representation_digest = 5;
+}
+
 enum BindingKind {
   BINDING_KIND_UNSPECIFIED = 0;
   BINDING_KIND_INHERIT_DOCUMENT = 1;
@@ -169,6 +177,8 @@ Validation:
 - `INHERIT_DOCUMENT` resolves to `DocumentPayload.source`; explicit origin must match.
 - `DERIVED_REPRESENTATION` requires a representation identity in the location variant.
 - Invalid or stale source binding makes the location unusable.
+- `DERIVED_REPRESENTATION` with `FormatReference` requires `representation_id` and `representation_digest`.
+- `TextRange.coordinate_space` permits only `ORIGINAL_SOURCE` or `SOURCE_TEXT_LAYER`; canonical coordinates use `CanonicalTextRange`.
 
 ### 3.4 Text ranges and text layers
 
@@ -194,7 +204,7 @@ enum CoordinateSpace {
   COORDINATE_SPACE_UNSPECIFIED = 0;
   COORDINATE_SPACE_ORIGINAL_SOURCE = 1;
   COORDINATE_SPACE_SOURCE_TEXT_LAYER = 2;
-  COORDINATE_SPACE_CANONICAL_TEXT = 3;
+  // Canonical coordinates use CanonicalTextRange, not TextRange.
 }
 
 enum TextNormalization {
@@ -340,7 +350,22 @@ enum ExecutionAttribution {
   EXECUTION_ATTRIBUTION_INHERITED = 1;
   EXECUTION_ATTRIBUTION_EXPLICIT = 2;
   EXECUTION_ATTRIBUTION_UNKNOWN = 3;
-  EXECUTION_ATTRIBUTION_NONE_KNOWN = 4; // known absence; requires schema approval
+  EXECUTION_ATTRIBUTION_NONE_KNOWN = 4; // candidate; requires explicit schema decision
+}
+
+message QualityReport {
+  QualityStatus status = 1;
+  double completeness = 2;         // 0.0..1.0, optional
+  double confidence = 3;           // 0.0..1.0, optional
+  repeated string warnings = 4;
+}
+
+enum QualityStatus {
+  QUALITY_STATUS_UNSPECIFIED = 0;
+  QUALITY_STATUS_COMPLETE = 1;
+  QUALITY_STATUS_DEGRADED = 2;
+  QUALITY_STATUS_PARTIAL = 3;
+  QUALITY_STATUS_UNKNOWN = 4;
 }
 ```
 
@@ -358,7 +383,16 @@ enum ExecutionAttribution {
 - Contributors are not copied into the element's `execution_ids` unless they directly produced the element.
 - `UNKNOWN` is not used for unresolved IDs; unresolved non-empty IDs are invalid.
 
-### 4.3 Graph integrity
+### 4.3 NONE_KNOWN decision (required)
+
+`NONE_KNOWN` is a candidate value, not an approved default. Choose one:
+
+- **Approve:** reserve enum value 4 and define its validation semantics; empty IDs plus `NONE_KNOWN` is valid known absence.
+- **Defer:** omit value 4 from the initial schema; keep only `INHERITED`, `EXPLICIT`, and `UNKNOWN`; do not use `UNKNOWN` for known absence.
+
+Implementation must not begin with this decision implicit.
+
+### 4.4 Graph integrity
 
 - Execution IDs are unique within a payload.
 - Parent references resolve.
@@ -407,11 +441,12 @@ message LossReport {
 |---|---|
 | `DocumentPayload.media_type` | retain field 1; reconcile with `source.media_type` |
 | `DocumentPayload.metadata/elements/flattened_text` | unchanged |
-| `DocumentElement.location` | retain; map to `PdfGeometry` record |
+| `DocumentElement.location` | Retain legacy field; map to `PdfGeometry` only when source format is PDF and coordinate semantics are established; otherwise preserve legacy and report new source location unavailable/unresolved |
 | `DocumentElement.id/child_ids/level` | unchanged |
 | `ContentProvenance` | unchanged |
-| No execution IDs | `INHERIT_DOCUMENT` only when primary exists; otherwise `UNKNOWN` |
-| Old geometry | `APPROXIMATE`, `DEPENDS_ON_PARSER`; no text range |
+| No execution IDs | `INHERIT` only when primary exists; otherwise `UNKNOWN` |
+| Old PDF geometry with established semantics | `APPROXIMATE`, `DEPENDS_ON_PARSER`; no text range |
+| Old non-PDF/generic location | No `PdfGeometry` manufactured; preserve legacy; no source location inference |
 | Old payload | `DocumentClass.UNKNOWN`; no inferred source identity |
 
 Old consumers ignore new fields. New consumers must not infer exact source/canonical coordinates from old payloads.
@@ -421,12 +456,14 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 | Case | Expected |
 |---|---|
 | Existing fields 1-4 only | Valid legacy payload; unknown new fields absent |
-| Old `ElementLocation` | Geometry record approximate; no text range |
+| Old PDF `ElementLocation` with established PDF semantics | Geometry record approximate; no text range |
+| Old non-PDF/generic `ElementLocation` | Preserve legacy; no `PdfGeometry`; source location unavailable/unresolved |
 | Duplicate execution ID | Invalid |
 | Unresolved execution ID | Invalid |
 | Empty + `INHERITED` without primary | Invalid/unavailable |
 | Empty + `UNKNOWN` | Valid unavailable provenance |
-| Empty + `NONE_KNOWN` | Valid known absence if schema-approved |
+| Empty + `NONE_KNOWN` | Valid only if schema decision is Approve; invalid/unsupported if deferred |
+| `TextRange.coordinate_space=CANONICAL_TEXT` | Invalid; use `CanonicalTextRange` |
 | Multiple source locations | All retained independently |
 | PDF text range without text layer | Invalid/unavailable |
 | PDF raw bytes as original text range | Invalid |
@@ -439,6 +476,8 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 ## 8. Test design
 
 - Legacy payload round-trip and old-consumer compatibility.
+- Old PDF geometry maps only with established PDF semantics; old Markdown/HTML locations do not become PDF geometry.
+- `TextRange` rejects canonical coordinate space.
 - Multiple location records on one element.
 - PDF geometry and text-layer range coexistence.
 - Markdown original-source and canonical ranges.
@@ -454,9 +493,10 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 This schema design is ready for review only if:
 
 - Field numbers and enum values are accepted.
-- `NONE_KNOWN` is either approved or deferred explicitly.
+- `NONE_KNOWN` is explicitly marked **Approve** or **Defer** using the decision in 4.3.
 - `execution_ids` direct-production/set semantics are accepted.
 - Validation rules are accepted as normative.
+- `FormatReference` and `QualityReport` definitions are accepted.
 
 Approval of this document would authorize a separate protobuf change PR. It would not authorize adapters, #20/#21, #950, or #947.
 
