@@ -70,7 +70,27 @@ Unicode rules:
 - Current Markdown parser does not claim NFC/NFKC normalization.
 - If canonical identity is later added, its Unicode version/profile must be explicit and tested.
 
-### 4.3 Multi-line ranges
+### 4.3 Java UTF-16 versus source UTF-8
+
+Java `String` indexes UTF-16 code units, while source ranges are UTF-8 byte offsets. The implementation must not mix them.
+
+Required strategy:
+
+- Read the original source as bytes once.
+- Build line start/end byte offsets by scanning the original UTF-8 bytes.
+- If the Markdown parser works on a decoded `String`, maintain an explicit mapping from parser string positions to original byte offsets.
+- Do not use `String.length()`, `String.indexOf()`, or regex match indices directly as byte offsets.
+- Reject any range whose conversion cannot be proven against the original bytes.
+
+Tests must include:
+
+- BMP multibyte characters;
+- supplementary-plane characters (outside U+FFFF, requiring surrogate pairs);
+- combining sequences;
+- mixed CRLF/CR/LF with multibyte characters;
+- inline Markdown around supplementary characters.
+
+### 4.4 Multi-line ranges
 
 For a multi-line element:
 
@@ -128,6 +148,8 @@ Required fixtures:
 8. CR-only source.
 9. Unicode precomposed/decomposed text.
 10. HTML entity text (`&amp;`) to assert no decoding claim.
+11. Supplementary Unicode characters outside the BMP (for example emoji) before/after Markdown markers.
+12. Combining marks and decomposed sequences around range boundaries.
 11. Repeated headings and list items to prevent text-search range resolution.
 12. Mixed line endings and trailing newline/no trailing newline.
 
@@ -140,6 +162,8 @@ Each fixture must include expected raw byte slices, not only expected parser tex
 - For every emitted range, `sourceBytes[start..end)` equals the expected raw slice.
 - Ranges are within source length and non-empty.
 - Start/end are byte offsets, not Java char offsets.
+- Supplementary-plane characters and combining sequences do not shift expected ranges.
+- UTF-16 string indexes are never used directly as source offsets.
 - CRLF/CR ranges preserve original bytes.
 - No test passes by searching parser output.
 
