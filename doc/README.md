@@ -14,6 +14,7 @@ end-to-end acceptance are separate evidence levels.
 | Current extraction deployment/hardware assumptions | [PoC hardware reference](k8s-test-hardware.md) |
 | Historical design proposals | [v1.21 Structured Content Extraction](Synanton_v1.21_structured_content_extraction.md), [v1.21 Multimodal model](Synanton_v1.21_multimodal_extraction_model.md) |
 | Document disposition | [Documentation inventory](DOCUMENTATION-INVENTORY.md) |
+| Document evidence contract status | Implemented schema; not yet adapter-exercised. See [repository status](../README.md#document-evidence-contract-status). |
 
 The v1.21 proposals below preserve useful design rationale. They are
 superseded as the platform's architecture authority, and their multimodal

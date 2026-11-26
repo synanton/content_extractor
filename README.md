@@ -6,6 +6,13 @@
 > The Phase 1 BM25 ingestion-to-UI-search path was accepted on 2026-10-21; that
 > validates the demonstrated path, not every format, option, async lifecycle,
 > or topology. Start at the [documentation index](doc/README.md).
+>
+> **Document evidence contract status:** the approved #22 schema is implemented
+> in `java/extraction-contract` and mirrored in Platform. It is **implemented
+> but not yet adapter-exercised**: current adapters do not yet populate typed
+> source locations, canonical-text identity, execution provenance, or
+> projection records. Schema tests validate field/enum compatibility and
+> round-trip behavior, not production adapter output.
 
 [![Status](https://img.shields.io/badge/Status-SCEP--5%20Integration-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
@@ -42,15 +49,27 @@ The extraction plane is deliberately separated from knowledge processing. It ext
 
 ## Overview
 
+### Document evidence contract status
+
+The #22 document evidence schema is implemented in `java/extraction-contract`:
+document identity/source descriptors, typed source locations, canonical text
+identity, execution provenance/attribution, projections, and loss reports.
+
+This is **schema implementation, not adapter validation**. Current PDF and text
+adapters still emit the legacy payload fields; they do not yet populate the new
+location, canonical, execution, or projection fields. No production
+adapter-exercised evidence is claimed for those capabilities.
+
 ### Implemented media types and limits of the claim
 
 The gateway currently advertises PDF (`application/pdf`) through the
 OpenDataLoader-backed PDF adapter and text-like formats (`text/plain`,
 `text/markdown`, `text/x-markdown`, `text/html`, `text/csv`, XHTML, and EPUB)
-through the Tika-backed adapter. Text-like results are primarily paragraph
-elements; they do not promise Markdown heading parsing, layout analysis, OCR,
-or table extraction. Audio, image, and video adapter modules are stubs that
-return unsupported results. Other capabilities are reported feature-by-feature
+through the Tika-backed adapter. Markdown now preserves heading, paragraph,
+nested-list, and fenced-code structure; other text-like formats remain
+primarily paragraph-oriented. This does not promise layout analysis, OCR, or
+table extraction. Audio, image, and video adapter modules are stubs that return
+unsupported results. Other capabilities are reported feature-by-feature
 and may be unsupported or partial. See module code/tests and the dated
 integration evidence before describing a format or feature as validated.
 
