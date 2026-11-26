@@ -339,6 +339,17 @@ message TextRange {
   int64 end = 4;                   // exclusive
   TextNormalization normalization = 5;
   LineEndingPolicy line_endings = 6;
+  TextLayerIdentity text_layer = 7; // required for SOURCE_TEXT_LAYER
+}
+
+message TextLayerIdentity {
+  string text_layer_id = 1;
+  string text_layer_digest = 2;     // SHA-256 of the declared extracted text bytes
+  string encoding = 3;              // e.g. UTF-8, UTF-16LE
+  string source_document_id = 4;
+  string source_digest = 5;
+  string extraction_execution_id = 6;
+  string extraction_layer_version = 7;
 }
 
 enum OffsetUnit {
@@ -350,8 +361,9 @@ enum OffsetUnit {
 
 enum CoordinateSpace {
   COORDINATE_SPACE_UNSPECIFIED = 0; // invalid for a usable range
-  COORDINATE_SPACE_ORIGINAL_SOURCE = 1;
-  COORDINATE_SPACE_CANONICAL_TEXT = 2;
+  COORDINATE_SPACE_ORIGINAL_SOURCE = 1; // original text source only
+  COORDINATE_SPACE_SOURCE_TEXT_LAYER = 2; // extracted text layer (e.g. PDF)
+  COORDINATE_SPACE_CANONICAL_TEXT = 3;
 }
 
 enum TextNormalization {
@@ -376,6 +388,9 @@ Normative defaults:
 - Canonical text: explicit unit; Platform legacy mapping defaults to `UTF16_CODE_UNIT`, but other units may be emitted only when declared.
 - No canonical offset is valid as an `ORIGINAL_SOURCE` record.
 - No unit may be silently converted. A producer that changes units must emit a new record with explicit semantics.
+- `ORIGINAL_SOURCE` is valid only when the source itself is text (for example Markdown/TXT). Raw PDF bytes are not UTF-8 text; PDF text ranges require `SOURCE_TEXT_LAYER`.
+- A `SOURCE_TEXT_LAYER` range requires `TextLayerIdentity` and must identify the extraction execution and source digest. The text layer is a derived source representation; use a `DERIVED` source binding that resolves to the original document source. Without this identity, PDF text-range parity is unavailable.
+- A PDF geometry-only result remains valid; the missing text layer must remain explicit, not approximated from bbox.
 
 ### 4.5 Canonical text range and identity
 
@@ -412,6 +427,24 @@ Rules:
 - Canonical ranges are separate from source records and may coexist with them.
 - An element may have several source records and at most one canonical range in this proposal; multiple canonical revisions require separate payloads or a future explicit collection.
 
+### 4.5.1 Deterministic canonical hashing
+
+For `canonical_text_digest`, define the byte sequence as:
+
+1. Decode source or extracted text according to the declared source encoding.
+2. Apply the declared Unicode normalization profile to the decoded code points.
+3. Apply the declared line-ending policy.
+4. Encode the resulting code-point sequence using the declared canonical encoding.
+5. Hash the complete encoded byte sequence with SHA-256.
+
+Rules:
+
+- Encoding names are canonical and case-insensitive (`UTF-8`, `UTF-16LE`, `UTF-16BE`); the emitted value uses the canonical spelling.
+- Normalization occurs before encoding and before line-ending conversion unless the profile explicitly says otherwise.
+- The digest input has no BOM unless the encoding profile explicitly includes one.
+- Offsets are into the normalized code-point sequence as represented in the declared `unit`; they are not byte offsets into the digest encoding unless `unit=UTF8_BYTE`.
+- A change to source digest/version, extraction execution, normalization profile/version, line-ending policy, encoding, or projection rules creates a new canonical text identity.
+
 ### 4.6 PDF geometry
 
 ```proto
@@ -434,6 +467,24 @@ Rules:
 - Missing geometry is `UNAVAILABLE`; do not fabricate a zero bbox.
 - Rotation must be retained; consumers must not assume zero.
 - Geometry precision belongs to the location record. Geometry can be exact in its coordinate system while no text range is available.
+
+### 4.6.1 Precision validation criteria
+
+`EXACT` is operationally defined per location type. Adapters may not choose it subjectively.
+
+| Location type | EXACT requires | APPROXIMATE | UNAVAILABLE |
+|---|---|---|---|
+| `PdfGeometry` | page_number > 0; finite valid bbox; coordinate system; unit; rotation; valid source binding; producer declares exact geometry | Inferred/layout-derived geometry, or incomplete provenance | Missing bbox/page/coordinate metadata |
+| `TextRange` in `ORIGINAL_SOURCE` | text source; valid UTF-8/UTF-16/code-point bounds; declared unit/space/normalization/line endings; source digest matches | Source text transformed or position inferred | No range; binary PDF raw bytes |
+| `TextRange` in `SOURCE_TEXT_LAYER` | `TextLayerIdentity` matches a registered extraction execution and source digest; valid bounds | Text layer exists but position/execution is approximate | No text layer identity or no range |
+| `CanonicalTextRange` | canonical identity matches source, execution, normalization, encoding, and digest; valid bounds | Canonical text exists but identity/provenance is incomplete | No canonical range or identity mismatch |
+| `FormatReference` | Adapter-declared exact format reference and binding | Adapter-declared approximate reference | No reference |
+
+Precision and reproducibility are independent:
+
+- Geometry can be exact in its coordinate system while its historical extraction provenance is `DEPENDS_ON_PARSER`.
+- A canonical range can be exact within a canonical text revision while reproducibility depends on normalization policy.
+- A location with invalid binding or mismatched digest is unusable regardless of its stated precision.
 
 ### 4.7 Format-specific references
 
@@ -463,6 +514,16 @@ Requirements:
 - `ExecutionOutcome` is separate from `QualityReport`: an execution can fail while the document succeeds through another execution, and a successful execution can produce degraded-quality output.
 - `EXECUTION_OUTCOME_FAILED` means that execution produced no usable output; it may still appear in history and parent links for failed/retried attempts.
 - Extractor/model/policy versions are opaque identifiers. The contract does not encode routing decisions.
+
+Graph integrity rules:
+
+- Execution IDs are unique within a payload.
+- Every parent `execution_id` resolves to a record in the same payload.
+- Parent edges are directed from child execution to its predecessor/input; cycles are invalid.
+- `RETRY` and `FALLBACK` describe replacement/attempt lineage; `INPUT_DEPENDENCY` and `MERGE` describe composition lineage.
+- A missing execution ID on an element means inherit the primary execution or explicit unknown, depending on document-level presence. An unresolved non-empty execution ID is a contract-integrity failure.
+- Unknown provenance (legacy/no execution record) is distinct from an unresolved reference. Unknown is representable; unresolved is invalid.
+- `ExecutionOutcome` describes execution result; `QualityReport` describes output quality. A failed execution may appear as history but contributes no usable elements.
 
 Example: mixed PDF where page 1 text comes from a PDF parser and page 2 comes from OCR:
 
@@ -495,14 +556,16 @@ Example: mixed PDF where page 1 text comes from a PDF parser and page 2 comes fr
 message DocumentProjection {
   string projection_id = 1;        // e.g. "flattened_text", "markdown"
   string format = 2;               // "text", "markdown", "html", "json"
-  ProjectionOutcome outcome = 3;
-  string unsupported_reason = 4;
-  string digest = 5;
+  string contract_id = 3;          // declared projection semantics
+  string contract_version = 4;
+  ProjectionOutcome outcome = 5;
+  string unsupported_reason = 6;
+  string digest = 7;
   oneof content {
-    bytes inline_content = 6;
-    PayloadReference reference = 7;
+    bytes inline_content = 8;
+    PayloadReference reference = 9;
   }
-  LossReport loss = 8;
+  LossReport loss = 10;
 }
 
 enum ProjectionOutcome {
@@ -524,7 +587,8 @@ Rules:
 
 - `SUCCESS_WITH_LOSS` requires at least one loss entry or reason.
 - `UNSUPPORTED` requires `unsupported_reason` and has no content.
-- `SUCCESS_LOSSLESS` means all relevant represented information is preserved for that projection target.
+- `SUCCESS_LOSSLESS` is evaluated against the declared `contract_id`/`contract_version` and its required preserved fields, not a subjective judgment.
+- A projection contract must define required preserved fields for its target; omitted required fields make the outcome `SUCCESS_WITH_LOSS` or `UNSUPPORTED`.
 - A projection must not silently flatten hierarchy, geometry, or source references.
 
 ### 4.10 Dispatcher boundary
@@ -727,9 +791,9 @@ The source range and canonical range are deliberately different. They must not b
 
 Start/end are absent. A consumer must not search `flattened_text` to recover them.
 
-### 7.5 One element with geometry and a source text range
+### 7.5 One PDF element with geometry and an extracted-text-layer range
 
-The repeated collection is required here: a single oneof alternative would lose one of these records.
+The repeated collection is required here: a single oneof alternative would lose one of these records. Raw PDF bytes are not a UTF-8 text source; the text range refers to an identified extracted text layer.
 
 ```json
 {
@@ -744,10 +808,26 @@ The repeated collection is required here: a single oneof alternative would lose 
     },
     {
       "location_id": "loc-text",
-      "source_binding": {"kind": "INHERIT_DOCUMENT"},
-      "precision": "APPROXIMATE",
-      "reproducibility": "DEPENDS_ON_NORMALIZATION",
-      "text_range": {"unit": "UTF8_BYTE", "coordinate_space": "ORIGINAL_SOURCE", "start": 300, "end": 420, "normalization": "NONE", "line_endings": "ORIGINAL"}
+      "source_binding": {"kind": "DERIVED", "document_id": "doc-1", "source_digest": "sha256:abc...", "source_version": "v1"},
+      "precision": "EXACT",
+      "reproducibility": "EXACT_FROM_SOURCE",
+      "text_range": {
+        "unit": "UTF8_BYTE",
+        "coordinate_space": "SOURCE_TEXT_LAYER",
+        "start": 300,
+        "end": 420,
+        "normalization": "NONE",
+        "line_endings": "ORIGINAL",
+        "text_layer": {
+          "text_layer_id": "pdf-text-layer-1",
+          "text_layer_digest": "sha256:layer...",
+          "encoding": "UTF-8",
+          "source_document_id": "doc-1",
+          "source_digest": "sha256:abc...",
+          "extraction_execution_id": "exec-pdf-1",
+          "extraction_layer_version": "1"
+        }
+      }
     }
   ]
 }
@@ -802,6 +882,9 @@ Projection records use `ProjectionOutcome`:
 7. Half-open range test: `[start,end)` selects exactly the expected bytes/code units.
 8. Approximate location remains `APPROXIMATE`; unavailable remains `UNAVAILABLE`.
 9. No negative test permits offset recovery by searching flattened/canonical text.
+10. PDF `SOURCE_TEXT_LAYER` range without matching `TextLayerIdentity` is invalid.
+11. PDF raw bytes are never accepted as an `ORIGINAL_SOURCE` UTF-8 range.
+12. Precision validation follows the per-location criteria in 4.6.1; an invalid binding/digest overrides an `EXACT` claim.
 
 ### 9.3 Projection loss
 
@@ -818,9 +901,11 @@ Projection records use `ProjectionOutcome`:
 3. A canonical range with source/execution/normalization identity round-trips.
 4. A canonical range whose source digest or execution ID does not match is rejected or reported unavailable.
 5. A changed normalization profile/version invalidates old canonical ranges; no silent reuse.
-6. `INHERIT_DOCUMENT` resolves to the document source; explicit matching binding succeeds; mismatched explicit binding fails validation.
-7. Source replacement with stale digest/version produces an invalid/unavailable result, not exact evidence.
-8. `UNSPECIFIED` binding, unit, coordinate space, precision, or reproducibility is not treated as exact.
+6. Hash test confirms normalization occurs before line-ending conversion/encoding and digest is over the exact encoded bytes.
+7. BOM, encoding-name casing, and line-ending differences produce the documented identity/digest result.
+8. `INHERIT_DOCUMENT` resolves to the document source; explicit matching binding succeeds; mismatched explicit binding fails validation.
+9. Source replacement with stale digest/version produces an invalid/unavailable result, not exact evidence.
+10. `UNSPECIFIED` binding, unit, coordinate space, precision, or reproducibility is not treated as exact.
 
 ### 9.5 Projection outcomes
 
@@ -829,6 +914,8 @@ Projection records use `ProjectionOutcome`:
 3. Unsupported projection reports `UNSUPPORTED` and no content.
 4. `flattened_text` without a projection record is treated as legacy, not lossless.
 5. A projection record with `projection_id="flattened_text"` describes its loss explicitly.
+6. A projection is `SUCCESS_LOSSLESS` only when the declared projection contract/version is preserved.
+7. A contract-required field that is omitted forces `SUCCESS_WITH_LOSS` or `UNSUPPORTED`.
 
 ### 9.6 Multi-provider provenance
 
@@ -839,8 +926,11 @@ Projection records use `ProjectionOutcome`:
 5. An element without execution IDs inherits the primary execution, or is reported unknown for legacy payloads.
 6. A merged element can reference multiple execution IDs without losing lineage.
 7. `ExecutionOutcome.FAILED` can coexist with a successful document and contributes no usable output.
-8. Quality degradation is distinct from execution failure.
-9. No dispatcher routing table, model endpoint, or policy decision is serialized into the document contract.
+8. Duplicate execution IDs fail validation.
+9. Parent references resolve; cycles are rejected; retry/fallback/merge directions are preserved.
+10. Missing execution reference fails; explicit unknown provenance is accepted and distinct.
+11. Quality degradation is distinct from execution failure.
+12. No dispatcher routing table, model endpoint, or policy decision is serialized into the document contract.
 
 ### 9.7 Evidence compatibility
 
@@ -851,12 +941,22 @@ Projection records use `ProjectionOutcome`:
 
 ## 10. Gate assessment
 
+### #22 — contract design
+
+**Ready for second design review, not schema implementation approval.**
+
+- The original exclusive-location blocker is resolved.
+- PDF text layers are now a defined prerequisite rather than an implicit range.
+- Canonical hashing, execution-graph integrity, precision validation, and projection contracts are specified for review.
+- Remaining decisions are recorded in section 11 and require approval before schema implementation.
+
 ### #20 / #21 — adapter capabilities
 
 **Conditionally ready for design, not implementation.**
 
 - Multiple simultaneous location records are now representable; the exclusive-oneof blocker is resolved in the proposal.
 - PDF geometry semantics are specified (page number, bbox, origin, units, rotation, per-record precision).
+- PDF text ranges are blocked on `SOURCE_TEXT_LAYER`/`TextLayerIdentity` approval; raw PDF bytes are not an original text source.
 - Markdown original and canonical ranges are specified separately, with canonical identity binding.
 - PDF/Markdown adapters still need concrete source-range extraction support.
 - The existing `PdfPayload`/`MarkdownPayload` alternatives are rejected: adapters target the common `DocumentPayload`.
@@ -886,30 +986,37 @@ Projection records use `ProjectionOutcome`:
 
 The following defaults are proposed for approval; they are not yet normative.
 
-| Area | Proposed disposition | Remaining question |
+| Area | Proposed disposition | Remaining approval |
 |---|---|---|
-| Canonical unit | UTF-16 code units for legacy Platform canonical ranges; all units explicit; no silent conversion | Whether canonical ranges should allow multiple units in one payload |
-| Legacy PDF precision | Geometry may be exact in its coordinate system; historical evidence precision is `APPROXIMATE`; no source text range inferred | Exact validation rule for old payloads |
-| Element types | Add `DOCUMENT`, `SECTION`, `FIGURE`, `UNKNOWN`; retain existing table row/cell types | Whether `DOCUMENT` is an element or only root metadata |
+| Canonical unit | UTF-16 code units for legacy Platform canonical ranges; all units explicit; no silent conversion | Whether multiple canonical units may coexist |
+| Legacy PDF precision | Geometry may be exact in its coordinate system; historical evidence precision is `APPROXIMATE`; no source text range inferred | Validation rule for old payloads |
+| PDF text ranges | Use `SOURCE_TEXT_LAYER` plus `TextLayerIdentity`; raw PDF bytes are not `ORIGINAL_SOURCE` text | Approve extraction-layer identity semantics |
+| Canonical hashing | Decode -> normalize Unicode -> apply line endings -> encode -> SHA-256 over exact bytes | Approve encoding/BOM profile details |
+| Element types | Add `DOCUMENT`, `SECTION`, `FIGURE`, `UNKNOWN`; retain table row/cell types | Whether `DOCUMENT` is an element or root metadata |
 | Table cells | Cell-level elements and optional source locations | Whether cell spans need dedicated fields |
 | Source binding | `INHERIT_DOCUMENT` by default; explicit binding only for different/derived source | Whether derived sources need their own document ID |
 | Schema version | Separate wire compatibility from semantic capability version | Exact versioning policy |
 | Exporter ownership | Content Extractor owns canonical projections | Whether a separate exporter service is ever needed |
 | Execution cardinality | Elements may reference multiple executions; typed parent links | Whether merged elements need a dedicated merge record |
+| Execution graph | Unique IDs; resolvable parents; no cycles; unknown vs unresolved distinct | Sentinel representation for unknown execution |
+| Precision | Per-location validation criteria in 4.6.1 | Approval of criteria |
+| Projection | Contract-relative lossless/lossy/unsupported with `contract_id/version` | Approval of projection contracts |
 | Quality | Execution outcome is separate from quality status | Which quality metrics are durable |
 
-Additional unresolved questions:
+Remaining unresolved questions:
 
-1. Exact canonical-text hashing input and encoding for `canonical_text_digest`.
-2. Whether source ranges on PDF text require a separate text-layer identity in addition to page/bbox.
+1. Exact canonical-text digest input for UTF-16 BOM and encoding-name canonicalization.
+2. Whether source ranges on PDF text require a separate text-layer identity in addition to page/bbox (proposed: yes, `TextLayerIdentity`).
 3. Whether `UNKNOWN` execution identity is represented by an empty list or an explicit sentinel.
 4. How table cell spans and cell-level locations are versioned.
 5. Whether audio/video transcript documents reuse the same document class or stay modality payloads.
+6. Whether merged elements require a dedicated merge record in addition to repeated execution IDs.
 
 ## 12. Readiness conclusion
 
-- **Contract design:** Proposal is sufficient for a second review after this revision.
-- **#20/#21:** Conditional; location multiplicity and binding semantics are now specified, but implementation is blocked until schema approval/mirroring and adapter source-range support.
+- **Contract design:** Ready for second design review. This is not schema implementation approval.
+- **#20:** Conditional; PDF text-range parity requires approval of `SOURCE_TEXT_LAYER`/`TextLayerIdentity`.
+- **#21:** Conditional; Markdown structure and source/canonical range semantics are substantially specified.
 - **#950:** Blocked until an approved production mapping from SCEP payload exists; unavailable-coordinate handling can proceed independently.
 - **#947:** Blocked until contract approval, adapter output, and a frozen compatibility reference exist.
 
