@@ -79,6 +79,9 @@ Required strategy:
 - Read the original source as bytes once.
 - Build line start/end byte offsets by scanning the original UTF-8 bytes.
 - If the Markdown parser works on a decoded `String`, maintain an explicit mapping from parser string positions to original byte offsets.
+- The mapping may resolve only valid source boundaries: UTF-8 code-point boundaries and UTF-16 surrogate-pair boundaries. Positions inside a UTF-8 sequence or surrogate pair are invalid.
+- Source decoding is explicit and strict UTF-8 for Markdown. Malformed UTF-8 must fail closed or mark the range unavailable; U+FFFD replacement must never be treated as exact source correspondence.
+- BOM handling is explicit; BOM bytes are not silently dropped from source offsets. If omitted from parser text, that transformation is documented and tested.
 - Do not use `String.length()`, `String.indexOf()`, or regex match indices directly as byte offsets.
 - Reject any range whose conversion cannot be proven against the original bytes.
 
@@ -95,7 +98,9 @@ Tests must include:
 For a multi-line element:
 
 - Start is the first byte of the first source line.
-- End is the byte after the last source line's content, before its trailing line terminator, unless the element explicitly owns that terminator.
+- End is the byte after the last source line's content, before its trailing line terminator.
+- Internal line terminators are included; the final line terminator is excluded.
+- Element-type exceptions are listed in the ownership table above; none applies in the minimum slice.
 - Empty ranges are invalid for evidence elements.
 - Ranges must not cross document boundaries.
 
@@ -150,8 +155,8 @@ Required fixtures:
 10. HTML entity text (`&amp;`) to assert no decoding claim.
 11. Supplementary Unicode characters outside the BMP (for example emoji) before/after Markdown markers.
 12. Combining marks and decomposed sequences around range boundaries.
-11. Repeated headings and list items to prevent text-search range resolution.
-12. Mixed line endings and trailing newline/no trailing newline.
+13. Repeated headings and list items to prevent text-search range resolution.
+14. Mixed line endings and trailing newline/no trailing newline.
 
 Each fixture must include expected raw byte slices, not only expected parser text.
 
@@ -165,6 +170,8 @@ Each fixture must include expected raw byte slices, not only expected parser tex
 - Supplementary-plane characters and combining sequences do not shift expected ranges.
 - UTF-16 string indexes are never used directly as source offsets.
 - CRLF/CR ranges preserve original bytes.
+- Final line terminators are excluded consistently per the ownership table.
+- Malformed UTF-8 is rejected/unavailable, never replaced and claimed exact.
 - No test passes by searching parser output.
 
 ### Structure
