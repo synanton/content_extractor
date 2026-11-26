@@ -261,6 +261,16 @@ Rules:
 - No unit conversion is implicit.
 - Text layer is a derived representation; `SourceBinding.DERIVED_REPRESENTATION` binds to origin.
 
+TextRange invariants:
+
+- `start >= 0`.
+- `end >= start`; `end == start` represents an empty half-open range.
+- `unit` must not be `OFFSET_UNIT_UNSPECIFIED`.
+- `coordinate_space` must not be `COORDINATE_SPACE_UNSPECIFIED`; only `ORIGINAL_SOURCE` and `SOURCE_TEXT_LAYER` are valid.
+- `normalization` and `line_endings` must be explicit; `UNSPECIFIED` is invalid for a usable range.
+- `NONE` normalization means no transformation; `ORIGINAL` line endings means no line-ending conversion.
+- Invalid bounds or unspecified semantics make the range invalid, never exact.
+
 Text-layer integrity rules:
 
 - `derivation_execution_id` must resolve in `ExtractionProvenance.executions`.
@@ -294,7 +304,7 @@ Validation combinations:
 | page_number | bbox | Result |
 |---:|---|---|
 | 0 | absent | Geometry unavailable; precision must be `UNAVAILABLE` |
-| >0 | absent | Page known, geometry unavailable; no fabricated bbox |
+| >0 | absent | Page known, geometry unavailable; precision must be `UNAVAILABLE`; no fabricated bbox |
 | 0 | present | Invalid |
 | >0 | present | Valid only with finite coordinates, `x0 <= x1`, `y0 <= y1`, non-empty coordinate system/unit |
 
@@ -338,6 +348,14 @@ Hash rule:
 5. SHA-256 the complete bytes.
 
 BOM bytes are excluded. Offsets are into the normalized text in `unit`; digest encoding is separate. Any source/execution/normalization/projection/encoding change creates a new canonical identity.
+
+Canonical identity integrity:
+
+- `source_document_id`, `source_digest`, and `source_version` must match the enclosing `DocumentPayload.source`.
+- `extraction_execution_id` must resolve in `ExtractionProvenance.executions`.
+- `canonical_text_digest` must identify the exact canonical bytes produced under the declared encoding, normalization profile, line-ending policy, and projection contract/version.
+- A canonical range without a matching identity is invalid.
+- A stale identity after source/execution/normalization/projection/encoding change remains unavailable; it must not be reused.
 
 ## 4. Execution provenance
 
@@ -426,7 +444,12 @@ Presence rule: `completeness`/`confidence` use proto3 presence. Unset means unkn
 
 ### 4.3 NONE_KNOWN decision (required)
 
-`NONE_KNOWN` is a candidate value, not an approved default. Choose one:
+`NONE_KNOWN` is a candidate value, not an approved default.
+
+**Decision status:** awaiting explicit schema approval.  
+**Recommendation:** Approve, because known absence is semantically distinct from unavailable provenance and avoids overloading `UNKNOWN`.
+
+Choose one:
 
 - **Approve:** reserve enum value 4 and define its validation semantics; empty IDs plus `NONE_KNOWN` is valid known absence.
 - **Defer:** omit value 4 from the initial schema; keep only `INHERITED`, `EXPLICIT`, and `UNKNOWN`; do not use `UNKNOWN` for known absence.
@@ -511,6 +534,11 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 | Text layer derivation execution unresolved | Invalid |
 | Text layer origin/source digest mismatch | Invalid |
 | `SOURCE_TEXT_LAYER` without `TextLayerIdentity` | Invalid |
+| TextRange start < 0 or end < start | Invalid |
+| TextRange unspecified unit/space/normalization/line-endings | Invalid |
+| PDF page_number > 0 with no bbox but precision not UNAVAILABLE | Invalid |
+| Canonical source/execution reference mismatch | Invalid |
+| Canonical digest/identity mismatch | Invalid/unavailable |
 | Quality completeness/confidence unset | Unknown; not 0.0 |
 | Multiple source locations | All retained independently |
 | PDF text range without text layer | Invalid/unavailable |
@@ -536,6 +564,8 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 - Unicode normalization, line endings, BOM exclusion, half-open ranges.
 - Source binding inheritance/mismatch/stale source.
 - Canonical identity changes on source, execution, normalization, projection, encoding.
+- Canonical identity rejects mismatched source document/digest/version or unresolved execution.
+- TextRange rejects negative, reversed, or unspecified semantics.
 - Execution ID uniqueness, parent resolution, cycles, attribution states, merge ancestry.
 - Projection lossless/lossy/unsupported outcomes.
 - Frozen evidence mapping produces explicit approximate/unavailable outcomes.
@@ -545,7 +575,7 @@ Old consumers ignore new fields. New consumers must not infer exact source/canon
 This schema design is ready for review only if:
 
 - Field numbers and enum values are accepted.
-- `NONE_KNOWN` is explicitly marked **Approve** or **Defer** using the decision in 4.3.
+- `NONE_KNOWN` decision is explicitly recorded as **Approve** or **Defer** using section 4.3 (current recommendation: Approve).
 - `execution_ids` direct-production/set semantics are accepted.
 - Validation rules are accepted as normative.
 - `FormatReference` and `QualityReport` definitions are accepted, including optional presence semantics.
