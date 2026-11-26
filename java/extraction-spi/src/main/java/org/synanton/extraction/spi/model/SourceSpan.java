@@ -15,8 +15,8 @@ public record SourceSpan(String locationId, long startByte, long endByte) {
         if (locationId == null || locationId.isBlank()) {
             throw new IllegalArgumentException("locationId must not be blank");
         }
-        if (startByte < 0 || endByte < startByte) {
-            throw new IllegalArgumentException("invalid source span: " + startByte + ".." + endByte);
+        if (startByte < 0 || endByte <= startByte) {
+            throw new IllegalArgumentException("source span must be non-empty: " + startByte + ".." + endByte);
         }
     }
 }

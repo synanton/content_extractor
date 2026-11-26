@@ -192,6 +192,11 @@ final class ResultMapper {
     }
 
     static DocumentPayload toDocumentPayload(NormalizedDocument document) {
+        if (document.source() == null
+                && document.elements().stream().anyMatch(el -> !el.sourceSpans().isEmpty())) {
+            throw new IllegalArgumentException(
+                    "source locations require an immutable document source identity");
+        }
         DocumentPayload.Builder builder = DocumentPayload.newBuilder()
                 .setMediaType(nvl(document.mediaType()))
                 .setFlattenedText(nvl(document.flattenedText()));

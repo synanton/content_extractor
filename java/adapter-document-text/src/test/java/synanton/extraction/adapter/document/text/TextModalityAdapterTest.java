@@ -277,6 +277,75 @@ class TextModalityAdapterTest {
         assertThat(result.isSuccess()).isFalse();
     }
 
+    @Test
+    void shouldRejectMarkdownWithoutSourceIdentity() throws Exception {
+        ExtractionRequest noSource = new ExtractionRequest(
+                "op-1", "tenant1", "key1", "ref1", null, "text/markdown",
+                ExtractionOptions.defaults(), "PRIORITY_NORMAL", null);
+
+        AdapterResult result = ADAPTER.extract(noSource, streamOf("# Title"));
+
+        assertThat(result.isSuccess()).isFalse();
+    }
+
+    @Test
+    void shouldPreserveBomInRawRangeAndStripItFromParserTextAndMetadata() throws Exception {
+        String content = "\uFEFF# Title\nBody\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        NormalizedElement heading = element(result, ElementType.HEADING);
+        assertThat(heading.text()).isEqualTo("Title");
+        SourceSpan span = heading.sourceSpans().getFirst();
+        assertThat(span.startByte()).isZero();
+        assertThat(new String(bytes, (int) span.startByte(),
+                (int) (span.endByte() - span.startByte()), StandardCharsets.UTF_8))
+                .isEqualTo("\uFEFF# Title");
+    }
+
+    @Test
+    void shouldHandleMultiLineParagraphAndCodeBlockCrlfRanges() throws Exception {
+        String content = "Line one\r\nLine two\r\n\r\n```\r\ncode one\r\ncode two\r\n```\r\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.PARAGRAPH, "Line one\r\nLine two");
+        assertRaw(result, bytes, ElementType.CODE_BLOCK,
+                "```\r\ncode one\r\ncode two\r\n```");
+    }
+
+    @Test
+    void shouldHandleLoneCrAndMixedLineEndings() throws Exception {
+        String content = "# Title\r\r- one\n  - two\r\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.HEADING, "# Title");
+        assertRaw(result, bytes, ElementType.LIST, "- one\n  - two");
+    }
+
+    @Test
+    void shouldExcludeFinalLineTerminatorButKeepInternalTerminators() throws Exception {
+        String content = "one\ntwo\n";
+        byte[] withTerminator = content.getBytes(StandardCharsets.UTF_8);
+        byte[] withoutTerminator = "one\ntwo".getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult a = ADAPTER.extract(requestFor("text/markdown"), new ByteArrayInputStream(withTerminator));
+        AdapterResult b = ADAPTER.extract(requestFor("text/markdown"), new ByteArrayInputStream(withoutTerminator));
+
+        assertRaw(a, withTerminator, ElementType.PARAGRAPH, "one\ntwo");
+        assertRaw(b, withoutTerminator, ElementType.PARAGRAPH, "one\ntwo");
+    }
+
     private static void assertRaw(AdapterResult result, byte[] bytes, ElementType type, String expected) {
         NormalizedElement element = element(result, type);
         assertThat(element.sourceSpans()).hasSize(1);

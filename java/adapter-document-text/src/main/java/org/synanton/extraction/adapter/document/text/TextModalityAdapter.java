@@ -84,6 +84,10 @@ public class TextModalityAdapter implements ModalityAdapter {
             List<NormalizedElement> elements;
             Map<String, String> markdownMetadata = Map.of();
             if (isMarkdown(request.mediaType())) {
+                if (request.source() == null) {
+                    throw new IllegalArgumentException(
+                            "Markdown source evidence requires an immutable source identity");
+                }
                 MarkdownSource markdown = readMarkdown(bytes);
                 elements = buildMarkdownElements(markdown);
                 markdownMetadata = extractMarkdownMetadata(markdown.text());
@@ -354,6 +358,9 @@ public class TextModalityAdapter implements ModalityAdapter {
     private Map<String, String> extractMarkdownMetadata(String markdown) {
         Map<String, String> metadata = new LinkedHashMap<>();
         String text = markdown.replace("\r\n", "\n").replace('\r', '\n');
+        if (text.startsWith("\uFEFF")) {
+            text = text.substring(1);
+        }
         for (String line : text.split("\n", -1)) {
             String stripped = line.strip();
             if (stripped.startsWith("## ")) break;
