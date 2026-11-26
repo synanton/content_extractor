@@ -294,15 +294,34 @@ public class TextModalityAdapter implements ModalityAdapter {
     }
 
     private static boolean isClosingFence(String line, String openingFence) {
-        String stripped = line.strip();
-        if (stripped.isEmpty() || stripped.charAt(0) != openingFence.charAt(0)) {
+        int leadingSpaces = 0;
+        while (leadingSpaces < line.length() && line.charAt(leadingSpaces) == ' ') {
+            leadingSpaces++;
+        }
+        if (leadingSpaces > 3) {
+            return false;
+        }
+        if (leadingSpaces < line.length() && line.charAt(leadingSpaces) == '\t') {
+            return false;
+        }
+        String candidate = line.substring(leadingSpaces);
+        if (candidate.isEmpty() || candidate.charAt(0) != openingFence.charAt(0)) {
             return false;
         }
         int run = 0;
-        while (run < stripped.length() && stripped.charAt(run) == openingFence.charAt(0)) {
+        while (run < candidate.length() && candidate.charAt(run) == openingFence.charAt(0)) {
             run++;
         }
-        return run >= openingFence.length() && stripped.substring(run).isBlank();
+        if (run < openingFence.length()) {
+            return false;
+        }
+        for (int i = run; i < candidate.length(); i++) {
+            char c = candidate.charAt(i);
+            if (c != ' ' && c != '\t') {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static SourceSpan sourceSpan(String elementId, int startByte, int endByte) {
