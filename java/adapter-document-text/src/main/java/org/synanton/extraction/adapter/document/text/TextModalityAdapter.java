@@ -176,10 +176,12 @@ public class TextModalityAdapter implements ModalityAdapter {
                 int startByte = line.startByte();
                 int endByte = line.contentEndByte();
                 StringBuilder code = new StringBuilder();
+                boolean firstCodeLine = true;
                 i++;
                 while (i < lines.size() && !isClosingFence(lines.get(i).text(), fenceMarker)) {
-                    if (!code.isEmpty()) code.append('\n');
+                    if (!firstCodeLine) code.append('\n');
                     code.append(lines.get(i).text());
+                    firstCodeLine = false;
                     endByte = lines.get(i).contentEndByte();
                     i++;
                 }
