@@ -110,7 +110,7 @@ public class TextModalityAdapter implements ModalityAdapter {
             NormalizedDocument document = new NormalizedDocument(
                     request.mediaType(), docMetadata, elements, flattenedText, sourceDescriptor(request));
 
-            Map<String, FeatureOutcome> featureStates = buildFeatureStates(request);
+            Map<String, FeatureOutcome> featureStates = buildFeatureStates(request, elements);
             return AdapterResult.success(document, featureStates);
 
         } catch (Exception e) {
@@ -336,25 +336,44 @@ public class TextModalityAdapter implements ModalityAdapter {
         int lastPipe = raw.lastIndexOf('|');
         List<TableCell> cells = new ArrayList<>();
         if (firstPipe >= 0 && lastPipe > firstPipe) {
+            int cellStart = firstPipe + 1;
+            boolean inCodeSpan = false;
             int cursor = firstPipe + 1;
             while (cursor < lastPipe) {
-                int next = raw.indexOf('|', cursor);
-                if (next < 0 || next > lastPipe) next = lastPipe;
-                int startChar = cursor;
-                int endChar = next;
-                while (startChar < endChar && Character.isWhitespace(raw.charAt(startChar))) startChar++;
-                while (endChar > startChar && Character.isWhitespace(raw.charAt(endChar - 1))) endChar--;
-                String text = raw.substring(startChar, endChar);
-                SourceSpan span = null;
-                if (endChar > startChar) {
-                    span = sourceSpanForRange("cell-" + line.startByte() + "-" + startChar,
-                            line, startChar, endChar);
+                char ch = raw.charAt(cursor);
+                if (ch == '`') {
+                    inCodeSpan = !inCodeSpan;
+                    cursor++;
+                    continue;
                 }
-                cells.add(new TableCell(text, header, span));
-                cursor = next + 1;
+                if (ch == '\\' && cursor + 1 < lastPipe) {
+                    cursor += 2;
+                    continue;
+                }
+                if (ch == '|' && !inCodeSpan) {
+                    addTableCell(cells, line, header, cellStart, cursor);
+                    cellStart = cursor + 1;
+                }
+                cursor++;
             }
+            addTableCell(cells, line, header, cellStart, lastPipe);
         }
         return new TableRow(line, header, cells);
+    }
+
+    private static void addTableCell(List<TableCell> cells, MarkdownLine line,
+                                     boolean header, int rawStart, int rawEnd) {
+        int startChar = rawStart;
+        int endChar = rawEnd;
+        while (startChar < endChar && Character.isWhitespace(line.text().charAt(startChar))) startChar++;
+        while (endChar > startChar && Character.isWhitespace(line.text().charAt(endChar - 1))) endChar--;
+        String text = line.text().substring(startChar, endChar);
+        SourceSpan span = null;
+        if (endChar > startChar) {
+            span = sourceSpanForRange("cell-" + line.startByte() + "-" + startChar,
+                    line, startChar, endChar);
+        }
+        cells.add(new TableCell(text, header, span));
     }
 
     private static SourceSpan sourceSpanForRange(String id, MarkdownLine line, int charEnd) {
@@ -575,7 +594,8 @@ public class TextModalityAdapter implements ModalityAdapter {
     /**
      * Derives the {@link FeatureOutcome} map from the request options and the media type.
      */
-    private Map<String, FeatureOutcome> buildFeatureStates(ExtractionRequest request) {
+    private Map<String, FeatureOutcome> buildFeatureStates(ExtractionRequest request,
+                                                           List<NormalizedElement> elements) {
         Map<String, FeatureOutcome> states = new LinkedHashMap<>();
         states.put("text", FeatureOutcome.APPLIED);
 
@@ -593,8 +613,11 @@ public class TextModalityAdapter implements ModalityAdapter {
         states.put("ocr", FeatureOutcome.NOT_APPLICABLE);
 
         // Markdown pipe tables are parsed structurally; other text formats are not.
+        boolean hasTable = elements.stream().anyMatch(el -> el.type() == ElementType.TABLE);
         states.put("tables", Boolean.TRUE.equals(options.tables())
-                ? (isMarkdown(request.mediaType()) ? FeatureOutcome.APPLIED : FeatureOutcome.UNSUPPORTED)
+                ? (isMarkdown(request.mediaType())
+                    ? (hasTable ? FeatureOutcome.APPLIED : FeatureOutcome.NOT_APPLICABLE)
+                    : FeatureOutcome.UNSUPPORTED)
                 : FeatureOutcome.NOT_REQUESTED);
 
         // Transcription is not applicable to document formats.

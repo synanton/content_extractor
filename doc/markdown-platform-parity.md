@@ -29,6 +29,16 @@ Pipe tables with a valid separator row emit:
 
 Tables without a valid `| ... |` separator are not claimed as tables.
 
+Compatibility limits:
+
+- Tables require leading and trailing pipes. The existing Platform parser also
+  requires this form; outer-pipe-less tables are not claimed.
+- Escaped pipes (`\|`) and pipes inside backtick code spans remain within one
+  cell.
+- Empty cells are preserved structurally without a synthetic source span.
+- `tables=APPLIED` means a table element was actually produced. If tables are
+  requested for a Markdown document without one, the state is `NOT_APPLICABLE`.
+
 ## Normalization and evidence
 
 - Element text is parser text, not the original source slice.
