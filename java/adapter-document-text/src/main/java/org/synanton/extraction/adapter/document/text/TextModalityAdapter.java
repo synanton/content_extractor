@@ -46,9 +46,9 @@ import java.util.regex.Pattern;
  *   <li>{@code application/epub+zip}</li>
  * </ul>
  *
- * <p>Markdown is parsed structurally into headings, paragraphs, lists and fenced code blocks.
- * Other text-like formats are split at blank lines into {@link ElementType#PARAGRAPH} elements.
- * No layout analysis, OCR, or table extraction is performed.
+ * <p>Markdown is parsed structurally into headings, paragraphs, lists, tables and fenced code
+ * blocks. Other text-like formats are split at blank lines into {@link ElementType#PARAGRAPH}
+ * elements. No layout analysis or OCR is performed.
  */
 @Slf4j
 public class TextModalityAdapter implements ModalityAdapter {
@@ -110,7 +110,7 @@ public class TextModalityAdapter implements ModalityAdapter {
             NormalizedDocument document = new NormalizedDocument(
                     request.mediaType(), docMetadata, elements, flattenedText, sourceDescriptor(request));
 
-            Map<String, FeatureOutcome> featureStates = buildFeatureStates(request);
+            Map<String, FeatureOutcome> featureStates = buildFeatureStates(request, elements);
             return AdapterResult.success(document, featureStates);
 
         } catch (Exception e) {
@@ -131,6 +131,8 @@ public class TextModalityAdapter implements ModalityAdapter {
     private static final Pattern LIST_ITEM = Pattern.compile("^(\\s*)([-*+]|\\d+[.)])[ \\t]+(.*)$");
     private static final Pattern FENCE = Pattern.compile("^\\s*(```+|~~~+)\\s*([^`]*)$");
     private static final Pattern METADATA_LINE = Pattern.compile("^\\*\\*([^*]{1,64}):\\*\\*[ \\t]*(.*)$");
+    private static final Pattern TABLE_ROW = Pattern.compile("^\\s*\\|.*\\|\\s*$");
+    private static final Pattern TABLE_SEPARATOR_CELL = Pattern.compile("^:?-{3,}:?$");
 
     /**
      * Parses Markdown into structural elements without reconstructing structure from Tika text.
@@ -212,6 +214,12 @@ public class TextModalityAdapter implements ModalityAdapter {
                 continue;
             }
 
+            if (isTableStart(lines, i)) {
+                i = parseTable(lines, i, elements, nextId);
+                nextId = elements.stream().mapToInt(e -> idNumber(e.id())).max().orElse(0) + 1;
+                continue;
+            }
+
             if (LIST_ITEM.matcher(raw).matches()) {
                 i = parseList(lines, i, elements, nextId);
                 nextId = elements.stream().mapToInt(e -> idNumber(e.id())).max().orElse(0) + 1;
@@ -246,6 +254,152 @@ public class TextModalityAdapter implements ModalityAdapter {
         }
         return elements;
     }
+
+    private static boolean isTableStart(List<MarkdownLine> lines, int index) {
+        if (index + 1 >= lines.size()) {
+            return false;
+        }
+        if (!TABLE_ROW.matcher(lines.get(index).text()).matches()
+                || !TABLE_ROW.matcher(lines.get(index + 1).text()).matches()) {
+            return false;
+        }
+        String separator = lines.get(index + 1).text().strip();
+        String[] cells = separator.substring(1, separator.length() - 1).split("\\|", -1);
+        if (cells.length == 0) {
+            return false;
+        }
+        for (String cell : cells) {
+            if (!TABLE_SEPARATOR_CELL.matcher(cell.strip()).matches()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private int parseTable(List<MarkdownLine> lines, int start,
+                           List<NormalizedElement> elements, int firstId) {
+        MarkdownLine header = lines.get(start);
+        int tableStart = header.startByte();
+        int tableEnd = lines.get(start + 1).contentEndByte();
+        int i = start + 1;
+        // Separator row is structural syntax, not a data row.
+        i++;
+        List<TableRow> rows = new ArrayList<>();
+        rows.add(tableRow(header, true));
+        while (i < lines.size() && TABLE_ROW.matcher(lines.get(i).text()).matches()) {
+            rows.add(tableRow(lines.get(i), false));
+            tableEnd = lines.get(i).contentEndByte();
+            i++;
+        }
+
+        int nextId = firstId + 1;
+        List<String> rowIds = new ArrayList<>();
+        List<NormalizedElement> rowElements = new ArrayList<>();
+        StringBuilder tableText = new StringBuilder();
+        for (TableRow row : rows) {
+            String rowId = "e" + nextId++;
+            List<String> cellIds = new ArrayList<>();
+            List<NormalizedElement> cellElements = new ArrayList<>();
+            for (TableCell cell : row.cells()) {
+                String cellId = "e" + nextId++;
+                cellIds.add(cellId);
+                cellElements.add(new NormalizedElement(
+                        cellId, ElementType.TABLE_CELL, ElementBounds.absent(), cell.text(),
+                        ContentOrigin.EMBEDDED_TEXT, 0, List.of(),
+                        cell.header() ? Map.of("header", "true") : Map.of(), null,
+                        cell.sourceSpan() == null ? List.of()
+                                : List.of(cell.sourceSpan())));
+            }
+            String rowText = row.cells().stream().map(TableCell::text).reduce((a, b) -> a + " | " + b).orElse("");
+            if (!tableText.isEmpty()) tableText.append('\n');
+            tableText.append(rowText);
+            rowIds.add(rowId);
+            rowElements.add(new NormalizedElement(
+                    rowId, ElementType.TABLE_ROW, ElementBounds.absent(), rowText,
+                    ContentOrigin.EMBEDDED_TEXT, 0, cellIds,
+                    row.header() ? Map.of("header", "true") : Map.of(), null,
+                    List.of(sourceSpanForRange(rowId, row.line(), row.line().text().length()))));
+            rowElements.addAll(cellElements);
+        }
+        String tableId = "e" + firstId;
+        elements.add(new NormalizedElement(
+                tableId, ElementType.TABLE, ElementBounds.absent(), tableText.toString(),
+                ContentOrigin.EMBEDDED_TEXT, 0, rowIds, Map.of(), null,
+                List.of(sourceSpan(tableId, tableStart, tableEnd))));
+        elements.addAll(rowElements);
+        return i;
+    }
+
+    private static TableRow tableRow(MarkdownLine line, boolean header) {
+        String raw = line.text();
+        int firstPipe = raw.indexOf('|');
+        int lastPipe = raw.lastIndexOf('|');
+        List<TableCell> cells = new ArrayList<>();
+        if (firstPipe >= 0 && lastPipe > firstPipe) {
+            int cellStart = firstPipe + 1;
+            boolean inCodeSpan = false;
+            int codeDelimiterLength = 0;
+            int cursor = firstPipe + 1;
+            while (cursor < lastPipe) {
+                char ch = raw.charAt(cursor);
+                if (ch == '`') {
+                    int run = 0;
+                    while (cursor + run < lastPipe && raw.charAt(cursor + run) == '`') {
+                        run++;
+                    }
+                    if (!inCodeSpan) {
+                        inCodeSpan = true;
+                        codeDelimiterLength = run;
+                    } else if (run == codeDelimiterLength) {
+                        inCodeSpan = false;
+                        codeDelimiterLength = 0;
+                    }
+                    cursor += run;
+                    continue;
+                }
+                if (ch == '\\' && cursor + 1 < lastPipe) {
+                    cursor += 2;
+                    continue;
+                }
+                if (ch == '|' && !inCodeSpan) {
+                    addTableCell(cells, line, header, cellStart, cursor);
+                    cellStart = cursor + 1;
+                }
+                cursor++;
+            }
+            addTableCell(cells, line, header, cellStart, lastPipe);
+        }
+        return new TableRow(line, header, cells);
+    }
+
+    private static void addTableCell(List<TableCell> cells, MarkdownLine line,
+                                     boolean header, int rawStart, int rawEnd) {
+        int startChar = rawStart;
+        int endChar = rawEnd;
+        while (startChar < endChar && Character.isWhitespace(line.text().charAt(startChar))) startChar++;
+        while (endChar > startChar && Character.isWhitespace(line.text().charAt(endChar - 1))) endChar--;
+        String text = line.text().substring(startChar, endChar);
+        SourceSpan span = null;
+        if (endChar > startChar) {
+            span = sourceSpanForRange("cell-" + line.startByte() + "-" + startChar,
+                    line, startChar, endChar);
+        }
+        cells.add(new TableCell(text, header, span));
+    }
+
+    private static SourceSpan sourceSpanForRange(String id, MarkdownLine line, int charEnd) {
+        return sourceSpanForRange(id, line, 0, charEnd);
+    }
+
+    private static SourceSpan sourceSpanForRange(String id, MarkdownLine line, int charStart, int charEnd) {
+        int start = line.startByte() + line.text().substring(0, charStart).getBytes(StandardCharsets.UTF_8).length;
+        int end = line.startByte() + line.text().substring(0, charEnd).getBytes(StandardCharsets.UTF_8).length;
+        return new SourceSpan(id, start, end);
+    }
+
+    private record TableRow(MarkdownLine line, boolean header, List<TableCell> cells) { }
+
+    private record TableCell(String text, boolean header, SourceSpan sourceSpan) { }
 
     private int parseList(List<MarkdownLine> lines, int start, List<NormalizedElement> elements, int firstId) {
         List<NormalizedElement> items = new ArrayList<>();
@@ -451,7 +605,8 @@ public class TextModalityAdapter implements ModalityAdapter {
     /**
      * Derives the {@link FeatureOutcome} map from the request options and the media type.
      */
-    private Map<String, FeatureOutcome> buildFeatureStates(ExtractionRequest request) {
+    private Map<String, FeatureOutcome> buildFeatureStates(ExtractionRequest request,
+                                                           List<NormalizedElement> elements) {
         Map<String, FeatureOutcome> states = new LinkedHashMap<>();
         states.put("text", FeatureOutcome.APPLIED);
 
@@ -468,9 +623,12 @@ public class TextModalityAdapter implements ModalityAdapter {
         // OCR is not applicable to digital-text formats.
         states.put("ocr", FeatureOutcome.NOT_APPLICABLE);
 
-        // Table extraction is not implemented in this adapter.
+        // Markdown pipe tables are parsed structurally; other text formats are not.
+        boolean hasTable = elements.stream().anyMatch(el -> el.type() == ElementType.TABLE);
         states.put("tables", Boolean.TRUE.equals(options.tables())
-                ? FeatureOutcome.UNSUPPORTED
+                ? (isMarkdown(request.mediaType())
+                    ? (hasTable ? FeatureOutcome.APPLIED : FeatureOutcome.NOT_APPLICABLE)
+                    : FeatureOutcome.UNSUPPORTED)
                 : FeatureOutcome.NOT_REQUESTED);
 
         // Transcription is not applicable to document formats.

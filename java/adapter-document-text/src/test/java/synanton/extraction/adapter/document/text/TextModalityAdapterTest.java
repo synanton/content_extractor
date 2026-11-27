@@ -419,6 +419,122 @@ class TextModalityAdapterTest {
     }
 
     @Test
+    void shouldParseMarkdownTableWithHierarchyAndSourceSpans() throws Exception {
+        String content = "| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 2 |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.TABLE, content.strip());
+        NormalizedElement table = element(result, ElementType.TABLE);
+        assertThat(table.text()).isEqualTo("Name | Value\nalpha | 1\nbeta | 2");
+        assertThat(table.childIds()).hasSize(3);
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_ROW)).hasSize(3);
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)).hasSize(6);
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .filter(e -> e.attributes().containsKey("header")))
+                .hasSize(2);
+    }
+
+    @Test
+    void shouldKeepEscapedPipesAndCodeSpanPipesInSingleCells() throws Exception {
+        String content = "| Expression | Example |\n|---|---|\n| escaped | a \\| b |\n| code | `x | y` |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        List<String> cellTexts = result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .map(NormalizedElement::text)
+                .toList();
+        assertThat(cellTexts).contains("a \\| b", "`x | y`");
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)).hasSize(6);
+    }
+
+    @Test
+    void shouldKeepMultiBacktickCodeSpanPipesInOneCell() throws Exception {
+        String content = "| Expression | Meaning |\n|---|---|\n| ``x | y`` | code containing a pipe |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        List<String> cellTexts = result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .map(NormalizedElement::text)
+                .toList();
+        assertThat(cellTexts).contains("``x | y``");
+        assertThat(cellTexts).hasSize(4);
+    }
+
+    @Test
+    void shouldIncludeSeparatorInHeaderOnlyTableSourceSpan() throws Exception {
+        String content = "| a | b |\n|---|---|\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.TABLE, content.strip());
+    }
+
+    @Test
+    void shouldExposeExactCellSourceSpansForNonAsciiContent() throws Exception {
+        String content = "| Name | Value |\n|---|---|\n| café | 1 |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        NormalizedElement cell = result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .filter(e -> e.text().equals("café"))
+                .findFirst().orElseThrow();
+        SourceSpan span = cell.sourceSpans().getFirst();
+        assertThat(new String(bytes, (int) span.startByte(),
+                (int) (span.endByte() - span.startByte()), StandardCharsets.UTF_8))
+                .isEqualTo("café");
+    }
+
+    @Test
+    void shouldPreserveEmptyTableCellsStructurally() throws Exception {
+        String content = "| a | |\n|---|---|\n| | b |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        List<NormalizedElement> cells = result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .toList();
+        assertThat(cells).extracting(NormalizedElement::text)
+                .containsExactly("a", "", "", "b");
+        assertThat(cells.stream().filter(c -> c.text().isEmpty()).allMatch(c -> c.sourceSpans().isEmpty()))
+                .isTrue();
+    }
+
+    @Test
+    void shouldReportTableFeatureOnlyWhenATableIsPresent() throws Exception {
+        ExtractionOptions tables = new ExtractionOptions(null, null, null, true, null, null, null);
+        AdapterResult withoutTable = ADAPTER.extract(requestFor("text/markdown", tables),
+                streamOf("# Heading\n\nNo table here.\n"));
+        AdapterResult withTable = ADAPTER.extract(requestFor("text/markdown", tables),
+                streamOf("| a | b |\n|---|---|\n| 1 | 2 |\n"));
+
+        assertThat(withoutTable.featureStates()).containsEntry("tables", FeatureOutcome.NOT_APPLICABLE);
+        assertThat(withTable.featureStates()).containsEntry("tables", FeatureOutcome.APPLIED);
+    }
+
+    @Test
     void shouldFlattenPlainTextMatchingSource() throws Exception {
         String content = "Line one\n\nLine two";
         AdapterResult result = ADAPTER.extract(requestFor("text/plain"), streamOf(content));
