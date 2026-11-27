@@ -7,7 +7,7 @@ platform integration references.
 
 | Document | Classification | Disposition / action |
 |---|---|---|
-| [`../README.md`](../README.md) | Current / repository entry point | Added supported media types and explicit unsupported modality status; distinguishes implemented #22 schema from adapter-exercised behavior. |
+| [`../README.md`](../README.md) | Current / repository entry point | Added supported media types and explicit unsupported modality status; distinguishes schema implementation, Markdown adapter-exercised evidence, and unverified PDF/other adapters. |
 | `doc/proposals/issue-22-document-contract-v1.md` | Approved contract design | Conceptual document evidence contract; schema implementation is tracked separately. |
 | `doc/proposals/issue-22-schema-design-v1.md` | Approved schema design | Field/enum allocation and validation rules; implementation landed in `java/extraction-contract` and Platform mirror. |
 | [`README.md`](README.md) | Current / navigation | Added as the documentation entry point and linked current architecture, code status, and historical proposals. |
