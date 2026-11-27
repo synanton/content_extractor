@@ -419,6 +419,29 @@ class TextModalityAdapterTest {
     }
 
     @Test
+    void shouldParseMarkdownTableWithHierarchyAndSourceSpans() throws Exception {
+        String content = "| Name | Value |\n|---|---|\n| alpha | 1 |\n| beta | 2 |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.TABLE, content.strip());
+        NormalizedElement table = element(result, ElementType.TABLE);
+        assertThat(table.text()).isEqualTo("Name | Value\nalpha | 1\nbeta | 2");
+        assertThat(table.childIds()).hasSize(3);
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_ROW)).hasSize(3);
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)).hasSize(6);
+        assertThat(result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .filter(e -> e.attributes().containsKey("header")))
+                .hasSize(2);
+    }
+
+    @Test
     void shouldFlattenPlainTextMatchingSource() throws Exception {
         String content = "Line one\n\nLine two";
         AdapterResult result = ADAPTER.extract(requestFor("text/plain"), streamOf(content));
