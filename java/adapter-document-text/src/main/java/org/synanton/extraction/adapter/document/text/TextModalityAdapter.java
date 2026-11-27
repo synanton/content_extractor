@@ -280,7 +280,7 @@ public class TextModalityAdapter implements ModalityAdapter {
                            List<NormalizedElement> elements, int firstId) {
         MarkdownLine header = lines.get(start);
         int tableStart = header.startByte();
-        int tableEnd = header.contentEndByte();
+        int tableEnd = lines.get(start + 1).contentEndByte();
         int i = start + 1;
         // Separator row is structural syntax, not a data row.
         i++;
@@ -338,12 +338,23 @@ public class TextModalityAdapter implements ModalityAdapter {
         if (firstPipe >= 0 && lastPipe > firstPipe) {
             int cellStart = firstPipe + 1;
             boolean inCodeSpan = false;
+            int codeDelimiterLength = 0;
             int cursor = firstPipe + 1;
             while (cursor < lastPipe) {
                 char ch = raw.charAt(cursor);
                 if (ch == '`') {
-                    inCodeSpan = !inCodeSpan;
-                    cursor++;
+                    int run = 0;
+                    while (cursor + run < lastPipe && raw.charAt(cursor + run) == '`') {
+                        run++;
+                    }
+                    if (!inCodeSpan) {
+                        inCodeSpan = true;
+                        codeDelimiterLength = run;
+                    } else if (run == codeDelimiterLength) {
+                        inCodeSpan = false;
+                        codeDelimiterLength = 0;
+                    }
+                    cursor += run;
                     continue;
                 }
                 if (ch == '\\' && cursor + 1 < lastPipe) {

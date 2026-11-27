@@ -460,6 +460,34 @@ class TextModalityAdapterTest {
     }
 
     @Test
+    void shouldKeepMultiBacktickCodeSpanPipesInOneCell() throws Exception {
+        String content = "| Expression | Meaning |\n|---|---|\n| ``x | y`` | code containing a pipe |\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        List<String> cellTexts = result.document().elements().stream()
+                .filter(e -> e.type() == ElementType.TABLE_CELL)
+                .map(NormalizedElement::text)
+                .toList();
+        assertThat(cellTexts).contains("``x | y``");
+        assertThat(cellTexts).hasSize(4);
+    }
+
+    @Test
+    void shouldIncludeSeparatorInHeaderOnlyTableSourceSpan() throws Exception {
+        String content = "| a | b |\n|---|---|\n";
+        byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"),
+                new ByteArrayInputStream(bytes));
+
+        assertThat(result.isSuccess()).isTrue();
+        assertRaw(result, bytes, ElementType.TABLE, content.strip());
+    }
+
+    @Test
     void shouldExposeExactCellSourceSpansForNonAsciiContent() throws Exception {
         String content = "| Name | Value |\n|---|---|\n| café | 1 |\n";
         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
