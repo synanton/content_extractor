@@ -8,11 +8,11 @@
 > or topology. Start at the [documentation index](doc/README.md).
 >
 > **Document evidence contract status:** the approved #22 schema is implemented
-> in `java/extraction-contract` and mirrored in Platform. It is **implemented
-> but not yet adapter-exercised**: current adapters do not yet populate typed
-> source locations, canonical-text identity, execution provenance, or
-> projection records. Schema tests validate field/enum compatibility and
-> round-trip behavior, not production adapter output.
+> in `java/extraction-contract` and mirrored in Platform. The Markdown adapter is
+> **adapter-exercised** for typed source identity and verified original-byte
+> source spans. Canonical-text identity, execution provenance, and projections
+> remain unpopulated. PDF and other adapters remain **unverified**; no general
+> adapter-parity claim is made.
 
 [![Status](https://img.shields.io/badge/Status-SCEP--5%20Integration-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
@@ -55,10 +55,10 @@ The #22 document evidence schema is implemented in `java/extraction-contract`:
 document identity/source descriptors, typed source locations, canonical text
 identity, execution provenance/attribution, projections, and loss reports.
 
-This is **schema implementation, not adapter validation**. Current PDF and text
-adapters still emit the legacy payload fields; they do not yet populate the new
-location, canonical, execution, or projection fields. No production
-adapter-exercised evidence is claimed for those capabilities.
+Markdown now emits source identity and verified original-byte source ranges.
+Other adapters still emit only legacy payload fields. Canonical-text identity,
+execution provenance, and projections remain unpopulated. This is Markdown
+adapter-exercised evidence only; PDF and other adapters remain unverified.
 
 ### Implemented media types and limits of the claim
 
