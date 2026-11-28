@@ -8,11 +8,13 @@
 > or topology. Start at the [documentation index](doc/README.md).
 >
 > **Document evidence contract status:** the approved #22 schema is implemented
-> in `java/extraction-contract` and mirrored in Platform. The Markdown adapter is
-> **adapter-exercised** for typed source identity and verified original-byte
-> source spans. Canonical-text identity, execution provenance, and projections
-> remain unpopulated. PDF and other adapters remain **unverified**; no general
-> adapter-parity claim is made.
+> in `java/extraction-contract` and mirrored in Platform. The Markdown adapter
+> emits typed source identity, verified original-byte source spans, and the
+> `synanton.canonical-text` v1 projection with canonical identity and UTF-16
+> element ranges. The canonical-text path was exercised against the IT Books
+> fixture and verified through Platform's serialized `DocumentPayload` path.
+> This is not a general adapter-parity claim: PDF and other adapters remain
+> unverified for canonical-text evidence.
 
 [![Status](https://img.shields.io/badge/Status-SCEP--5%20Integration-blue)](https://github.com/Synanton/content_extractor)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
@@ -55,10 +57,44 @@ The #22 document evidence schema is implemented in `java/extraction-contract`:
 document identity/source descriptors, typed source locations, canonical text
 identity, execution provenance/attribution, projections, and loss reports.
 
-Markdown now emits source identity and verified original-byte source ranges.
-Other adapters still emit only legacy payload fields. Canonical-text identity,
-execution provenance, and projections remain unpopulated. This is Markdown
-adapter-exercised evidence only; PDF and other adapters remain unverified.
+The Markdown adapter emits source identity, verified original-byte source
+ranges, and canonical-text evidence under `synanton.canonical-text` v1. The
+canonical projection carries a SHA-256 digest and canonical-text identity;
+ranged elements use half-open UTF-16 code-unit offsets into that projection.
+The actual IT Books fixture has been exercised through the serialized
+`DocumentPayload` and Platform's `CanonicalTextEvidence` validator.
+
+This is a demonstrated Markdown/IT Books path, not a general adapter-parity
+claim. PDF and other adapters remain unverified for canonical-text evidence.
+Execution provenance and other projection capabilities should be assessed
+separately against their own implementation and adapter evidence.
+
+### Canonical text evidence
+
+For adapters that implement canonical-text evidence, the projection contract is
+`synanton.canonical-text` v1:
+
+- The canonical projection is UTF-8 text identified by its SHA-256 digest and
+  `CanonicalTextIdentity` (`ct-v1:<digest>`).
+- Element canonical ranges are half-open UTF-16 code-unit offsets into that
+  exact projection. They are not original-source byte offsets.
+- Original-source `SourceSpan` evidence remains separate and uses half-open
+  UTF-8 byte offsets into immutable original source bytes. The two coordinate
+  systems must never be translated implicitly.
+- Source identity, including the registered source version, must be present
+  and consistent. The extractor carries the source version supplied in the
+  request; Platform is responsible for supplying the registered version.
+- Canonical text may include metadata preambles, comments, and front matter
+  that are not semantic elements.
+- For Markdown tables, the TABLE element's declared canonical range is the
+  range authority; row and cell ranges are nested within it. The adapter's
+  canonical table representation is preserved as emitted.
+
+Canonical evidence is evidence about the exact canonical projection. Consumers
+must validate its identity and ranges rather than searching text, deriving
+ranges from descendants, or interpreting original-source byte offsets as
+canonical offsets. A successful extraction operation alone does not guarantee
+that a downstream consumer has accepted or bound the evidence.
 
 ### Implemented media types and limits of the claim
 
