@@ -6,6 +6,8 @@ import org.apache.tika.parser.AutoDetectParser;
 import org.apache.tika.parser.ParseContext;
 import org.apache.tika.sax.BodyContentHandler;
 import org.synanton.extraction.spi.model.AdapterResult;
+import org.synanton.extraction.spi.model.CanonicalRange;
+import org.synanton.extraction.spi.model.CanonicalText;
 import org.synanton.extraction.spi.model.ContentOrigin;
 import org.synanton.extraction.spi.model.ElementBounds;
 import org.synanton.extraction.spi.model.ElementType;
@@ -25,7 +27,11 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -82,6 +88,7 @@ public class TextModalityAdapter implements ModalityAdapter {
             tikaMetadata.set(Metadata.CONTENT_TYPE, request.mediaType());
 
             List<NormalizedElement> elements;
+            CanonicalText canonicalText;
             Map<String, String> markdownMetadata = Map.of();
             if (isMarkdown(request.mediaType())) {
                 if (request.source() == null) {
@@ -91,12 +98,14 @@ public class TextModalityAdapter implements ModalityAdapter {
                 MarkdownSource markdown = readMarkdown(bytes);
                 elements = buildMarkdownElements(markdown);
                 markdownMetadata = extractMarkdownMetadata(markdown.text());
+                canonicalText = buildMarkdownCanonicalText(markdown, elements);
             } else {
                 // Use an unlimited buffer (-1) to capture the full document body.
                 BodyContentHandler handler = new BodyContentHandler(-1);
                 AutoDetectParser parser = new AutoDetectParser();
                 parser.parse(new ByteArrayInputStream(bytes), handler, tikaMetadata, new ParseContext());
                 elements = buildElements(handler.toString().trim());
+                canonicalText = buildStructuralCanonicalText(elements);
             }
 
             Map<String, String> docMetadata = extractDocMetadata(tikaMetadata);
@@ -108,7 +117,8 @@ public class TextModalityAdapter implements ModalityAdapter {
                     .reduce("", (a, b) -> a.isBlank() ? b : a + "\n" + b);
 
             NormalizedDocument document = new NormalizedDocument(
-                    request.mediaType(), docMetadata, elements, flattenedText, sourceDescriptor(request));
+                    request.mediaType(), docMetadata, elements, flattenedText,
+                    sourceDescriptor(request), canonicalText);
 
             Map<String, FeatureOutcome> featureStates = buildFeatureStates(request, elements);
             return AdapterResult.success(document, featureStates);
@@ -122,6 +132,234 @@ public class TextModalityAdapter implements ModalityAdapter {
             );
         }
     }
+
+    private static CanonicalText buildStructuralCanonicalText(List<NormalizedElement> elements) {
+        StringBuilder out = new StringBuilder();
+        Map<String, CanonicalRange> ranges = new LinkedHashMap<>();
+        for (NormalizedElement element : elements) {
+            appendCanonicalSegment(out, ranges, element.id(), element.text());
+        }
+        assignContainerRanges(elements, ranges);
+        return new CanonicalText(out.toString(), "scep-structural-text", "1", ranges);
+    }
+
+    private static CanonicalText buildMarkdownCanonicalText(
+            MarkdownSource markdown, List<NormalizedElement> elements) {
+        Map<String, NormalizedElement> byId = new HashMap<>();
+        for (NormalizedElement element : elements) {
+            byId.put(element.id(), element);
+        }
+        List<CanonicalSegment> segments = new ArrayList<>();
+        for (NormalizedElement element : elements) {
+            if (element.type() == ElementType.TABLE_ROW || element.type() == ElementType.TABLE_CELL) {
+                continue;
+            }
+            if (element.text() == null || element.text().isBlank()) {
+                continue;
+            }
+            int start = element.sourceSpans().isEmpty() ? Integer.MAX_VALUE
+                    : element.sourceSpans().stream()
+                        .mapToInt(span -> (int) span.startByte()).min().orElse(Integer.MAX_VALUE);
+            int end = element.sourceSpans().isEmpty() ? Integer.MAX_VALUE
+                    : element.sourceSpans().stream()
+                        .mapToInt(span -> (int) span.endByte()).max().orElse(Integer.MAX_VALUE);
+            segments.add(new CanonicalSegment(element.id(), element.text(), start, end));
+        }
+        segments.addAll(markdownMetadataSegments(markdown));
+        segments.sort(Comparator.comparingInt(CanonicalSegment::startByte)
+                .thenComparingInt(CanonicalSegment::endByte));
+
+        StringBuilder out = new StringBuilder();
+        Map<String, CanonicalRange> ranges = new LinkedHashMap<>();
+        for (CanonicalSegment segment : segments) {
+            appendCanonicalSegment(out, ranges, segment.elementId(), segment.text());
+        }
+        assignTableDescendantRanges(elements, byId, ranges);
+        assignContainerRanges(elements, ranges);
+        return new CanonicalText(out.toString(), "scep-markdown-structural", "1", ranges);
+    }
+
+    private static List<CanonicalSegment> markdownMetadataSegments(MarkdownSource markdown) {
+        List<CanonicalSegment> segments = new ArrayList<>();
+        List<MarkdownLine> group = new ArrayList<>();
+        boolean seenContent = false;
+        boolean inComment = false;
+        boolean inFrontMatter = false;
+        for (MarkdownLine line : markdown.lines()) {
+            String stripped = line.text().strip();
+            if (stripped.isEmpty()) {
+                flushMetadataSegment(segments, group);
+                group.clear();
+                continue;
+            }
+            if (!seenContent && stripped.equals("---")) {
+                seenContent = true;
+                inFrontMatter = true;
+                group.add(line);
+                continue;
+            }
+            if (inFrontMatter) {
+                group.add(line);
+                if (stripped.equals("---")) {
+                    inFrontMatter = false;
+                    flushMetadataSegment(segments, group);
+                    group.clear();
+                }
+                continue;
+            }
+            Matcher heading = HEADING.matcher(line.text());
+            if (heading.matches()) {
+                seenContent = true;
+                flushMetadataSegment(segments, group);
+                group.clear();
+                if (heading.group(1).length() >= 2) {
+                    return segments;
+                }
+                continue;
+            }
+            if (inComment || stripped.startsWith("<!--")) {
+                seenContent = true;
+                inComment = true;
+                group.add(line);
+                if (stripped.contains("-->")) {
+                    inComment = false;
+                }
+                continue;
+            }
+            seenContent = true;
+            if (METADATA_LINE.matcher(line.text()).matches()) {
+                group.add(line);
+                continue;
+            }
+            flushMetadataSegment(segments, group);
+            group.clear();
+        }
+        flushMetadataSegment(segments, group);
+        return segments;
+    }
+
+    private static void flushMetadataSegment(List<CanonicalSegment> segments, List<MarkdownLine> group) {
+        if (group.isEmpty()) {
+            return;
+        }
+        String text = group.stream()
+                .map(line -> Normalizer.normalize(line.text().stripTrailing(), Normalizer.Form.NFC)
+                        .replaceAll("[ \\t]+", " ").trim())
+                .filter(value -> !value.isEmpty())
+                .reduce((left, right) -> left + " " + right)
+                .orElse("");
+        if (!text.isEmpty()) {
+            segments.add(new CanonicalSegment(
+                    null, text, group.getFirst().startByte(), group.getLast().contentEndByte()));
+        }
+    }
+
+    private static void appendCanonicalSegment(
+            StringBuilder out, Map<String, CanonicalRange> ranges, String elementId, String text) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        String normalized = Normalizer.normalize(text, Normalizer.Form.NFC);
+        if (!out.isEmpty()) {
+            out.append('\n');
+        }
+        int start = out.length();
+        out.append(normalized);
+        int end = out.length();
+        if (elementId != null) {
+            ranges.put(elementId, new CanonicalRange(start, end));
+        }
+    }
+
+    private static void assignTableDescendantRanges(
+            List<NormalizedElement> elements,
+            Map<String, NormalizedElement> byId,
+            Map<String, CanonicalRange> ranges) {
+        for (NormalizedElement element : elements) {
+            if (element.type() != ElementType.TABLE) {
+                continue;
+            }
+            CanonicalRange tableRange = ranges.get(element.id());
+            if (tableRange == null) {
+                continue;
+            }
+            String tableText = element.text();
+            int cursor = 0;
+            for (String rowId : element.childIds()) {
+                NormalizedElement row = byId.get(rowId);
+                if (row == null || row.text() == null || row.text().isBlank()) {
+                    continue;
+                }
+                int rowStart = tableText.indexOf(row.text(), cursor);
+                if (rowStart < 0) {
+                    continue;
+                }
+                ranges.put(rowId, new CanonicalRange(
+                        tableRange.start() + rowStart,
+                        tableRange.start() + rowStart + row.text().length()));
+                int cellCursor = 0;
+                for (String cellId : row.childIds()) {
+                    NormalizedElement cell = byId.get(cellId);
+                    if (cell == null || cell.text() == null || cell.text().isBlank()) {
+                        continue;
+                    }
+                    int cellStart = row.text().indexOf(cell.text(), cellCursor);
+                    if (cellStart < 0) {
+                        continue;
+                    }
+                    ranges.put(cellId, new CanonicalRange(
+                            tableRange.start() + rowStart + cellStart,
+                            tableRange.start() + rowStart + cellStart + cell.text().length()));
+                    cellCursor = cellStart + cell.text().length();
+                }
+                cursor = rowStart + row.text().length();
+            }
+        }
+    }
+
+    private static void assignContainerRanges(
+            List<NormalizedElement> elements, Map<String, CanonicalRange> ranges) {
+        Map<String, NormalizedElement> byId = new HashMap<>();
+        for (NormalizedElement element : elements) {
+            byId.put(element.id(), element);
+        }
+        for (NormalizedElement element : elements) {
+            if (!ranges.containsKey(element.id())) {
+                CanonicalRange range = unionDescendantRange(element, byId, ranges, new HashSet<>());
+                if (range != null) {
+                    ranges.put(element.id(), range);
+                }
+            }
+        }
+    }
+
+    private static CanonicalRange unionDescendantRange(
+            NormalizedElement element,
+            Map<String, NormalizedElement> byId,
+            Map<String, CanonicalRange> ranges,
+            Set<String> seen) {
+        if (!seen.add(element.id())) {
+            return null;
+        }
+        int start = Integer.MAX_VALUE;
+        int end = -1;
+        for (String childId : element.childIds()) {
+            CanonicalRange range = ranges.get(childId);
+            if (range == null) {
+                NormalizedElement child = byId.get(childId);
+                if (child != null) {
+                    range = unionDescendantRange(child, byId, ranges, seen);
+                }
+            }
+            if (range != null) {
+                start = Math.min(start, range.start());
+                end = Math.max(end, range.end());
+            }
+        }
+        return end > start ? new CanonicalRange(start, end) : null;
+    }
+
+    private record CanonicalSegment(String elementId, String text, int startByte, int endByte) { }
 
     private static boolean isMarkdown(String mediaType) {
         return "text/markdown".equals(mediaType) || "text/x-markdown".equals(mediaType);

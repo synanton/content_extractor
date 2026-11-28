@@ -3,6 +3,8 @@ package org.synanton.extraction.adapter.in.grpc;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Timestamp;
 import org.synanton.extraction.domain.model.SyncExtractionOutcome;
+import org.synanton.extraction.spi.model.CanonicalRange;
+import org.synanton.extraction.spi.model.CanonicalText;
 import org.synanton.extraction.spi.model.ContentOrigin;
 import org.synanton.extraction.spi.model.ElementBounds;
 import org.synanton.extraction.spi.model.ElementType;
@@ -16,11 +18,15 @@ import org.synanton.extraction.spi.model.ObjectRef;
 import org.synanton.extraction.spi.model.SourceSpan;
 import org.synanton.extraction.v1.BindingKind;
 import org.synanton.extraction.v1.BoundingBox;
+import org.synanton.extraction.v1.CanonicalTextIdentity;
+import org.synanton.extraction.v1.CanonicalTextRange;
 import org.synanton.extraction.v1.ContentProvenance;
 import org.synanton.extraction.v1.CoordinateSpace;
 import org.synanton.extraction.v1.DocumentElement;
 import org.synanton.extraction.v1.DocumentElementType;
+import org.synanton.extraction.v1.DocumentIdentity;
 import org.synanton.extraction.v1.DocumentPayload;
+import org.synanton.extraction.v1.DocumentProjection;
 import org.synanton.extraction.v1.ElementLocation;
 import org.synanton.extraction.v1.LineEndingPolicy;
 import org.synanton.extraction.v1.ExtractionError;
@@ -33,6 +39,7 @@ import org.synanton.extraction.v1.ObjectReference;
 import org.synanton.extraction.v1.LocationPrecision;
 import org.synanton.extraction.v1.OffsetUnit;
 import org.synanton.extraction.v1.PayloadDescriptor;
+import org.synanton.extraction.v1.ProjectionOutcome;
 import org.synanton.extraction.v1.Reproducibility;
 import org.synanton.extraction.v1.ResourceUsage;
 import org.synanton.extraction.v1.ResultProvenance;
@@ -45,10 +52,12 @@ import org.synanton.extraction.v1.SubmitExtractionRequest;
 import org.synanton.extraction.v1.TextNormalization;
 import org.synanton.extraction.v1.TextRange;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.Map;
 
 final class ResultMapper {
 
@@ -98,7 +107,8 @@ final class ResultMapper {
         }
 
         if (outcome.document() != null) {
-            DocumentPayload payload = toDocumentPayload(outcome.document());
+            DocumentPayload payload = toDocumentPayload(
+                    outcome.document(), outcome.contentRefId(), outcome.operationId());
             byte[] bytes = payload.toByteArray();
             builder.setFlattenedText(nvl(outcome.document().flattenedText()));
             builder.setPayload(StructuredPayload.newBuilder()
@@ -152,7 +162,8 @@ final class ResultMapper {
         }
 
         if (outcome.document() != null) {
-            DocumentPayload payload = toDocumentPayload(outcome.document());
+            DocumentPayload payload = toDocumentPayload(
+                    outcome.document(), contentRefId, outcome.operationId());
             byte[] bytes = payload.toByteArray();
             builder.setFlattenedText(nvl(outcome.document().flattenedText()));
             builder.setPayload(StructuredPayload.newBuilder()
@@ -192,6 +203,11 @@ final class ResultMapper {
     }
 
     static DocumentPayload toDocumentPayload(NormalizedDocument document) {
+        return toDocumentPayload(document, null, null);
+    }
+
+    static DocumentPayload toDocumentPayload(
+            NormalizedDocument document, String documentId, String executionId) {
         if (document.source() == null
                 && document.elements().stream().anyMatch(el -> !el.sourceSpans().isEmpty())) {
             throw new IllegalArgumentException(
@@ -211,13 +227,62 @@ final class ResultMapper {
                     .setFilename(nvl(source.filename()))
                     .build());
         }
+
+        CanonicalTextIdentity canonicalIdentity = null;
+        Map<String, CanonicalRange> canonicalRanges = Map.of();
+        CanonicalText canonicalText = document.canonicalText();
+        if (canonicalText != null) {
+            String canonicalDocumentId = resolveDocumentId(document, documentId);
+            byte[] canonicalBytes = canonicalText.text().getBytes(StandardCharsets.UTF_8);
+            String canonicalDigest = "sha256:" + sha256Hex(canonicalBytes);
+            canonicalIdentity = CanonicalTextIdentity.newBuilder()
+                    .setCanonicalTextId("ct-v1:" + canonicalDigest)
+                    .setCanonicalTextDigest(canonicalDigest)
+                    .setEncoding("UTF-8")
+                    .setSourceDocumentId(canonicalDocumentId)
+                    .setSourceDigest(source == null ? "" : nvl(source.sourceDigest()))
+                    .setSourceVersion(source == null ? "" : nvl(source.sourceVersion()))
+                    .setExtractionExecutionId(nvl(executionId))
+                    .setNormalizationProfile(canonicalText.normalizationProfile())
+                    .setNormalizationVersion(canonicalText.normalizationVersion())
+                    .setProjectionContractId("synanton.canonical-text")
+                    .setProjectionContractVersion("1")
+                    .setLineEndings(LineEndingPolicy.LINE_ENDING_LF)
+                    .setNormalization(TextNormalization.TEXT_NORMALIZATION_NFC)
+                    .build();
+            canonicalRanges = canonicalText.elementRanges();
+            builder.setIdentity(DocumentIdentity.newBuilder().setDocumentId(canonicalDocumentId));
+            builder.addProjections(DocumentProjection.newBuilder()
+                    .setProjectionId("canonical-text")
+                    .setFormat("text/plain; charset=utf-8")
+                    .setContractId("synanton.canonical-text")
+                    .setContractVersion("1")
+                    .setOutcome(ProjectionOutcome.PROJECTION_OUTCOME_SUCCESS_LOSSLESS)
+                    .setDigest(canonicalDigest)
+                    .setInlineContent(ByteString.copyFrom(canonicalBytes)));
+        }
+
         for (NormalizedElement el : document.elements()) {
-            builder.addElements(toElement(el));
+            builder.addElements(toElement(el, canonicalIdentity, canonicalRanges));
         }
         return builder.build();
     }
 
-    private static DocumentElement toElement(NormalizedElement el) {
+    private static String resolveDocumentId(NormalizedDocument document, String preferred) {
+        if (preferred != null && !preferred.isBlank()) {
+            return preferred;
+        }
+        if (document.source() != null && document.source().filename() != null
+                && !document.source().filename().isBlank()) {
+            return document.source().filename();
+        }
+        return "document";
+    }
+
+    private static DocumentElement toElement(
+            NormalizedElement el,
+            CanonicalTextIdentity canonicalIdentity,
+            Map<String, CanonicalRange> canonicalRanges) {
         DocumentElement.Builder b = DocumentElement.newBuilder()
                 .setId(nvl(el.id()))
                 .setType(toElementType(el.type()))
@@ -242,6 +307,18 @@ final class ResultMapper {
                     .build());
         }
         el.sourceSpans().forEach(span -> b.addSourceLocations(toSourceLocation(span)));
+        if (canonicalIdentity != null) {
+            CanonicalRange range = canonicalRanges.get(el.id());
+            if (range != null) {
+                b.setCanonicalTextRange(CanonicalTextRange.newBuilder()
+                        .setIdentity(canonicalIdentity)
+                        .setUnit(OffsetUnit.OFFSET_UNIT_UTF16_CODE_UNIT)
+                        .setStart(range.start())
+                        .setEnd(range.end())
+                        .setNormalization(TextNormalization.TEXT_NORMALIZATION_NFC)
+                        .setLineEndings(LineEndingPolicy.LINE_ENDING_LF));
+            }
+        }
         return b.build();
     }
 
