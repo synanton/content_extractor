@@ -75,7 +75,7 @@ For adapters that implement canonical-text evidence, the projection contract is
 `synanton.canonical-text` v1:
 
 - The canonical projection is UTF-8 text identified by its SHA-256 digest and
-  `CanonicalTextIdentity` (`ct-v1:<digest>`).
+  `CanonicalTextIdentity` (`ct-v1:sha256:<64 lowercase hex>`).
 - Element canonical ranges are half-open UTF-16 code-unit offsets into that
   exact projection. They are not original-source byte offsets.
 - Original-source `SourceSpan` evidence remains separate and uses half-open
