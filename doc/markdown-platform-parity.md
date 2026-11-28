@@ -42,8 +42,10 @@ Compatibility limits:
 ## Normalization and evidence
 
 - Element text is parser text, not the original source slice.
-- Original UTF-8 source ranges remain separate from any future canonical-text projection.
-- No canonical-text identity, execution provenance, or projection is emitted by this adapter change.
+- Original UTF-8 source ranges remain separate from the canonical-text projection.
+- Canonical-text identity, execution provenance, and projection are emitted for Markdown; see
+  [`canonical-text-evidence.md`](canonical-text-evidence.md).
+- The metadata preamble is part of canonical text but remains non-semantic.
 - Inline Markdown interpretation and HTML entity decoding are not claimed.
 
 ## Compatibility

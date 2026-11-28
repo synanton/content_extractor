@@ -14,13 +14,15 @@ import java.util.Map;
  * @param elements      all structural elements in reading order
  * @param flattenedText concatenated plain text derived from {@code elements}
  * @param source        immutable source identity, or null when unavailable
+ * @param canonicalText canonical structural text and element ranges, or null when unavailable
  */
 public record NormalizedDocument(
         String mediaType,
         Map<String, String> metadata,
         List<NormalizedElement> elements,
         String flattenedText,
-        NormalizedSourceDescriptor source) {
+        NormalizedSourceDescriptor source,
+        CanonicalText canonicalText) {
 
     /** Backward-compatible constructor for adapters without source identity. */
     public NormalizedDocument(
@@ -28,7 +30,17 @@ public record NormalizedDocument(
             Map<String, String> metadata,
             List<NormalizedElement> elements,
             String flattenedText) {
-        this(mediaType, metadata, elements, flattenedText, null);
+        this(mediaType, metadata, elements, flattenedText, null, null);
+    }
+
+    /** Backward-compatible constructor for adapters without canonical text. */
+    public NormalizedDocument(
+            String mediaType,
+            Map<String, String> metadata,
+            List<NormalizedElement> elements,
+            String flattenedText,
+            NormalizedSourceDescriptor source) {
+        this(mediaType, metadata, elements, flattenedText, source, null);
     }
 
     /**

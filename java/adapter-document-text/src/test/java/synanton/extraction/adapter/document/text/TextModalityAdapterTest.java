@@ -544,6 +544,55 @@ class TextModalityAdapterTest {
     }
 
     @Test
+    void shouldEmitCanonicalTextWithPreambleAndElementRanges() throws Exception {
+        String content = "# Book\n\n**Author:** Alex\n\n<!-- metadata -->\n\n## Preface\n\nBody\n";
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        var canonical = result.document().canonicalText();
+        assertThat(canonical).isNotNull();
+        assertThat(canonical.text()).isEqualTo("Book\n**Author:** Alex\n<!-- metadata -->\nPreface\nBody");
+        assertThat(canonical.elementRanges()).containsKeys("e1", "e2", "e3");
+        assertThat(result.document().elements())
+                .extracting(NormalizedElement::text)
+                .doesNotContain("**Author:** Alex", "<!-- metadata -->");
+        assertThat(result.document().metadata()).containsEntry("Author", "Alex");
+
+        for (NormalizedElement element : result.document().elements()) {
+            var range = canonical.elementRanges().get(element.id());
+            if (range != null) {
+                assertThat(canonical.text().substring(range.start(), range.end()))
+                        .isEqualTo(element.text());
+            }
+        }
+    }
+
+    @Test
+    void shouldNestTableDescendantCanonicalRangesInsideTable() throws Exception {
+        String content = "| a | b |\n|---|---|\n| 1 | 2 |\n";
+
+        AdapterResult result = ADAPTER.extract(requestFor("text/markdown"), streamOf(content));
+
+        assertThat(result.isSuccess()).isTrue();
+        var canonical = result.document().canonicalText();
+        var table = element(result, ElementType.TABLE);
+        var tableRange = canonical.elementRanges().get(table.id());
+        assertThat(tableRange).isNotNull();
+        assertThat(canonical.text().substring(tableRange.start(), tableRange.end()))
+                .isEqualTo(table.text());
+
+        for (NormalizedElement row : result.document().elements().stream()
+                .filter(value -> value.type() == ElementType.TABLE_ROW).toList()) {
+            var range = canonical.elementRanges().get(row.id());
+            assertThat(range).isNotNull();
+            assertThat(range.start()).isGreaterThanOrEqualTo(tableRange.start());
+            assertThat(range.end()).isLessThanOrEqualTo(tableRange.end());
+            assertThat(canonical.text().substring(range.start(), range.end())).isEqualTo(row.text());
+        }
+    }
+
+    @Test
     void shouldReportOcrNotApplicableWhenOcrOptionIsTrue() throws Exception {
         ExtractionOptions options = new ExtractionOptions(
                 true,  // ocr explicitly requested
